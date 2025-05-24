@@ -1,0 +1,6 @@
+# Core dependencies
+numpy>=1.19.0
+Pillow>=8.0.0  # For image processing if needed
+
+# Note: MalmoPython is not available via pip
+# It should be installed with the Malmo platform 

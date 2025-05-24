@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environment
+venv/
+env/
+.env/
+
+# IDE
+.vscode/
+.idea/
+
+# Minecraft runtime files
+.minecraft/
+.minecraftserver/
+.gradle/
+run/
+build/
+eclipse-ORIGINAL/
+
+# Keep the original Malmo installation intact
+../Python_Examples/
+../Minecraft/
+../Schemas/
+../Mod/ 
