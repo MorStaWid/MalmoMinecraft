@@ -109,7 +109,7 @@ def algorithm(agent_host: AgentHost) -> None:
 
         if world_state.is_mission_running and world_state.number_of_observations_since_last_state > 0:
             observation = json.loads(world_state.observations[-1].text)
-            print(observation)
+            # print(observation)
             # Check for grid activation. Will not proceed gameloop if not found.
             if "blocks" not in observation:
                 print("Failed to retrieve information regarding block surroundings!")
@@ -120,7 +120,7 @@ def algorithm(agent_host: AgentHost) -> None:
                 print("It seems like FullStat is not activated!")
                 break
 
-            print("{} | {} | {}".format(observation["XPos"], observation["YPos"], observation["ZPos"]))
+            # print("{} | {} | {}".format(observation["XPos"], observation["YPos"], observation["ZPos"]))
             for i in range(size ** 2):
                 r_edge, c_edge = divmod(i, size)
                 is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1       # For stack
@@ -147,8 +147,9 @@ def algorithm(agent_host: AgentHost) -> None:
                     print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 4)!")
                     return
 
-            # print(f"Visit Block Coord: {list(visited_block_coord)}")
+            print(f"Visit Block Coord: {list(visited_block_coord)}")
             print(f"Visit Stack: {to_be_visited}")
+            print("------------------------------------------------------------------")
             # assert len(to_be_visited) == 3
             if len(to_be_visited) <= 0:
                 print("No more blocks to explore to! Exiting loop...")
