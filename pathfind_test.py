@@ -96,6 +96,9 @@ def algorithm(agent_host: AgentHost) -> None:
     visited_block_coord = set()
     to_be_visited = set()
 
+    # TODO: For single block stack. Just like DFS, we will use to backtrack if an agent reaches a dead end.
+    block_visit = []
+
     size = 5
     center_idx = size ** 2 // 2
     center_x, center_z = center_idx % size, center_idx // size
@@ -164,7 +167,7 @@ def algorithm(agent_host: AgentHost) -> None:
                     return
 
             print("\nVisited Blocks:", list(visited_block_coord))
-            print("Blocks to Visit:", list(to_be_visited))
+            print("To Be Visited:", list(to_be_visited))
             print("------------------------------------------------------------------")
             # assert len(to_be_visited) == 3
             if len(to_be_visited) <= 0:
