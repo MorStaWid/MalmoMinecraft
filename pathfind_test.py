@@ -10,7 +10,7 @@ import time
 from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
-INSERT_STRING_HERE = "Up and Down Stairs"
+INSERT_STRING_HERE = "Large Room Corridor"
 
 OPTIONS = {
     "Block Surround": (0, 14, -9),
@@ -46,7 +46,7 @@ def run_xml_mission():
                 <Weather>clear</Weather>
             </ServerInitialConditions> 
             <ServerHandlers>
-                <FileWorldGenerator src="C:\\Malmo\\Minecraft\\run\\saves\\Algorithm World Test"/>
+                <FileWorldGenerator src="C:\\Malmo-0.37.0-Windows-64bit_withBoost_Python3.7\\Minecraft\\run\\saves\\Algorithm World Test"/>
                 <ServerQuitFromTimeUp timeLimitMs="10000"/>
                 <ServerQuitWhenAnyAgentFinishes/>
             </ServerHandlers>
@@ -120,6 +120,22 @@ def algorithm(agent_host: AgentHost) -> None:
                 print("It seems like FullStat is not activated!")
                 break
 
+            # Check for air two blocks ahead of agent's level and below
+            front_block = observation["blocks"][(2 * 25) + (center_idx + (2 * size))]  # y=0, two blocks ahead
+            front_below_block = observation["blocks"][(1 * 25) + (center_idx + (2 * size))]   # y=-1, two blocks ahead
+            
+            if front_block == "air" and front_below_block == "air":
+                print("Danger! Air detected ahead at agent's level and below. Stopping!")
+                # Calculate and remove the front block coordinate from to_be_visited
+                front_xpos = math.floor(observation["XPos"]) - center_block_offset[center_idx + (2 * size)][0]
+                front_ypos = math.floor(observation["YPos"])
+                front_zpos = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (2 * size)][1]
+                front_block_coord = (front_xpos, front_ypos, front_zpos)
+                if front_block_coord in to_be_visited:
+                    to_be_visited.remove(front_block_coord)
+                agent_host.sendCommand("move 0")
+                break
+
             # print("{} | {} | {}".format(observation["XPos"], observation["YPos"], observation["ZPos"]))
             for i in range(size ** 2):
                 r_edge, c_edge = divmod(i, size)
@@ -147,8 +163,8 @@ def algorithm(agent_host: AgentHost) -> None:
                     print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 4)!")
                     return
 
-            print(f"Visit Block Coord: {list(visited_block_coord)}")
-            print(f"Visit Stack: {to_be_visited}")
+            print("\nVisited Blocks:", list(visited_block_coord))
+            print("Blocks to Visit:", list(to_be_visited))
             print("------------------------------------------------------------------")
             # assert len(to_be_visited) == 3
             if len(to_be_visited) <= 0:
