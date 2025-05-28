@@ -121,8 +121,206 @@ class Golly(object):
         if world_state.is_mission_running and world_state.number_of_observations_since_last_state > 0:
             pass
 
+<<<<<<< Updated upstream
     def find_portal_room(self):
         pass
+=======
+    def print_observation(self, observation):
+        """Print detailed information about what the agent sees"""
+        if "LineOfSight" in observation:
+            los = observation["LineOfSight"]
+            print("\n=== Line of Sight Information ===")
+            print(f"Block Type: {los.get('type', 'None')}")
+            print(f"Distance: {los.get('distance', 'Unknown')} blocks")
+            print(f"Block Position: x={los.get('x', 'Unknown')}, y={los.get('y', 'Unknown')}, z={los.get('z', 'Unknown')}")
+            print(f"Block Variant: {los.get('variant', 'None')}")
+            print("===============================\n")
+        else:
+            print("\nNo block in line of sight\n")
+
+    # This file contains the StrongholdFinder class which is responsible for locating and navigating
+    # through a Minecraft stronghold structure. It includes functionality for teleporting to stronghold
+    # coordinates, finding the portal room, and handling movement/navigation within the stronghold.
+
+    def find_portal_room(self):
+        # Enable creative mode for easier movement and mining
+        self.agent_host.sendCommand("chat /gamemode 1")
+        time.sleep(0.5)
+        
+        # Give night vision potion to see better in dark areas
+        self.agent_host.sendCommand("chat /effect @p night_vision 999999 1 true")
+        time.sleep(0.5)
+        
+        # Enable flying capability for better navigation
+        self.agent_host.sendCommand("chat /ability @p mayfly true")
+        time.sleep(0.5)
+        
+        # Activate flying mode
+        self.agent_host.sendCommand("fly 1")
+        time.sleep(0.5)
+
+        # Initialize tracking variables
+        visited_positions = set()          # Keep track of where we've been
+        stuck_count = 0                    # Counter for when agent gets stuck
+        last_position = None               # Store previous position
+        recovery_stage = 0                 # Different stages of unstuck behavior
+        original_position = None           # Starting position reference
+        current_direction = 0              # Direction facing (0:forward, 1:right, 2:back, 3:left)
+
+        while True:
+            world_state = self.agent_host.getWorldState()
+            if not world_state.is_mission_running:
+                break
+
+            if world_state.number_of_observations_since_last_state > 0:
+                # Get current observation data
+                observation = json.loads(world_state.observations[-1].text)
+                
+                # Get and round current position coordinates
+                current_pos = (
+                    round(observation.get('XPos', 0), 1),
+                    round(observation.get('YPos', 0), 1),
+                    round(observation.get('ZPos', 0), 1)
+                )
+
+                # Store initial position if not already saved
+                if original_position is None:
+                    original_position = current_pos
+                    print(f"\nOriginal position saved: x={original_position[0]}, y={original_position[1]}, z={original_position[2]}")
+
+                # Display current position for debugging
+                print(f"\nCurrent Position: x={current_pos[0]}, y={current_pos[1]}, z={current_pos[2]}")
+                self.print_observation(observation)
+
+                # Check if agent is stuck in same position
+                if last_position == current_pos:
+                    stuck_count += 1
+                else:
+                    stuck_count = 0
+                    recovery_stage = 0
+                    last_position = current_pos
+
+                # Check for portal room or doors
+                if "LineOfSight" in observation:
+                    block_type = observation["LineOfSight"].get("type", "")
+                    distance = observation["LineOfSight"].get("distance", float('inf'))
+                    if block_type == "end_portal_frame":
+                        print(f"\nFound the portal room!")
+                        # Clean up effects and return to normal mode
+                        self.agent_host.sendCommand("chat /effect @p clear")
+                        time.sleep(0.5)
+                        self.agent_host.sendCommand("fly 0")
+                        self.agent_host.sendCommand("chat /ability @p mayfly false")
+                        self.agent_host.sendCommand("chat /gamemode 0")
+                        return True
+                    elif block_type in ["iron_door", "wooden_door"]:
+                        # Attempt to open any doors found
+                        print(f"\nFound a door at distance {distance}")
+                        self.agent_host.sendCommand("use 1")
+                        time.sleep(0.5)
+                        self.agent_host.sendCommand("use 0")
+
+                # Handle movement and recovery when stuck
+                if stuck_count == 0:
+                    # Normal forward movement
+                    print("Moving forward")
+                    self.agent_host.sendCommand("move 1")
+                elif recovery_stage == 0:
+                    # Calculate potential new directions
+                    right_turn_direction = (current_direction + 1) % 4
+                    left_turn_direction = (current_direction - 1) % 4
+                    
+                    # Determine possible future positions
+                    right_pos = self.calculate_future_position(current_pos, right_turn_direction)
+                    left_pos = self.calculate_future_position(current_pos, left_turn_direction)
+                    
+                    # Calculate distances to starting point
+                    right_distance = self.calculate_distance(right_pos, original_position)
+                    left_distance = self.calculate_distance(left_pos, original_position)
+                    
+                    # Add randomness to direction choice
+                    random_choice = random.random() < 0.2
+                    
+                    if random_choice or right_distance < left_distance:
+                        # Try turning right
+                        print("Trying to turn right")
+                        self.agent_host.sendCommand("turn 1")
+                        time.sleep(0.5)
+                        self.agent_host.sendCommand("turn 0")
+                        self.agent_host.sendCommand("move 1")
+                        current_direction = right_turn_direction
+                    else:
+                        # Try turning left
+                        print("Trying to turn left")
+                        self.agent_host.sendCommand("turn -1")
+                        time.sleep(0.5)
+                        self.agent_host.sendCommand("turn 0")
+                        self.agent_host.sendCommand("move 1")
+                        current_direction = left_turn_direction
+                    
+                    recovery_stage = 1
+                elif recovery_stage == 1:
+                    # Try opposite direction from first attempt
+                    if current_direction % 2 == 0:  # If previously went right
+                        print("Trying to turn left")
+                        self.agent_host.sendCommand("turn -1")
+                        time.sleep(0.5)
+                        self.agent_host.sendCommand("turn 0")
+                        self.agent_host.sendCommand("move 1")
+                        current_direction = (current_direction - 1) % 4
+                    else:  # If previously went left
+                        print("Trying to turn right")
+                        self.agent_host.sendCommand("turn 1")
+                        time.sleep(0.5)
+                        self.agent_host.sendCommand("turn 0")
+                        self.agent_host.sendCommand("move 1")
+                        current_direction = (current_direction + 1) % 4
+                    recovery_stage = 2
+                elif recovery_stage == 2:
+                    # Last resort: try to mine through
+                    print("Mining through")
+                    self.agent_host.sendCommand("pitch 0.2")
+                    time.sleep(0.5)
+                    self.agent_host.sendCommand("attack 1")
+                    time.sleep(0.5)
+                    self.agent_host.sendCommand("attack 0")
+                    self.agent_host.sendCommand("pitch -0.2")
+                    self.agent_host.sendCommand("move 1")
+                    recovery_stage = 3  # Reset recovery stage
+
+                # Track visited positions
+                visited_positions.add(current_pos)
+
+                # Reset if too many positions visited
+                if len(visited_positions) > 100:
+                    print("Too many visited positions, resetting direction")
+                    self.agent_host.sendCommand("turn 1")
+                    time.sleep(0.5)
+                    visited_positions.clear()
+
+            time.sleep(0.1)
+
+        # Clean up if portal room not found
+        print("Failed to find the portal room")
+        self.agent_host.sendCommand("chat /effect @p clear")
+        return False
+
+    def calculate_future_position(self, current_pos, direction):
+        """Calculate the position after moving in the given direction"""
+        x, y, z = current_pos
+        if direction == 0:  # forward
+            return (x + 1, y, z)
+        elif direction == 1:  # right
+            return (x, y, z + 1)
+        elif direction == 2:  # back
+            return (x - 1, y, z)
+        else:  # left
+            return (x, y, z - 1)
+
+    def calculate_distance(self, pos1, pos2):
+        """Calculate Euclidean distance between two positions"""
+        return ((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2 + (pos1[2] - pos2[2])**2)**0.5
+>>>>>>> Stashed changes
 
     def mine_hidden_path(self):
         pass
