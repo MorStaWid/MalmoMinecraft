@@ -10,7 +10,7 @@ import time
 from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
-INSERT_STRING_HERE = "Large Room Corridor"
+INSERT_STRING_HERE = "3x3 Basic Pathfind"
 
 OPTIONS = {
     "Block Surround": (0, 14, -9),
@@ -46,7 +46,7 @@ def run_xml_mission():
                 <Weather>clear</Weather>
             </ServerInitialConditions> 
             <ServerHandlers>
-                <FileWorldGenerator src="C:\\Malmo-0.37.0-Windows-64bit_withBoost_Python3.7\\Minecraft\\run\\saves\\Algorithm World Test"/>
+                <FileWorldGenerator src="C:\\Malmo\\Minecraft\\run\\saves\\Algorithm World Test"/>
                 <ServerQuitFromTimeUp timeLimitMs="10000"/>
                 <ServerQuitWhenAnyAgentFinishes/>
             </ServerHandlers>
@@ -71,7 +71,7 @@ def run_xml_mission():
                     </Grid>
                 </ObservationFromGrid>
                 <AbsoluteMovementCommands/>
-                <ContinuousMovementCommands turnSpeedDegs="180"/>
+                <ContinuousMovementCommands turnSpeedDegs="90"/>
                 <ChatCommands/>
                 <MissionQuitCommands/>
                 <AgentQuitFromTouchingBlockType>
@@ -92,20 +92,41 @@ def get_y_elevation_offset(observation: dict, index: int, size: int) -> int | No
 
     return y
 
+def check_clearance(curr_block_coord, current_direction: int, to_be_visited: set) -> bool:
+    print(curr_block_coord)
+    for i in range(-1, 2):
+        # Up to 3. No need to check upper block.
+        for y in range(-2, 3):
+            if current_direction == 2:      # Down
+                if (curr_block_coord[0] + i, curr_block_coord[1] + y, curr_block_coord[2] + 2) in to_be_visited:
+                    return True
+            elif current_direction == 0:    # Up
+                if (curr_block_coord[0] + i, curr_block_coord[1] + y, curr_block_coord[2] - 2) in to_be_visited:
+                    return True
+            elif current_direction == 3:    # Left
+                if (curr_block_coord[0] + 2, curr_block_coord[1] + y, curr_block_coord[2] + i) in to_be_visited:
+                    return True
+            elif current_direction == 1:    # Right
+                if (curr_block_coord[0] - 2, curr_block_coord[1] + y, curr_block_coord[2] + i) in to_be_visited:
+                    return True
+
+    return False
+
 def algorithm(agent_host: AgentHost) -> None:
     visited_block_coord = set()
     to_be_visited = set()
 
     # TODO: For single block stack. Just like DFS, we will use to backtrack if an agent reaches a dead end.
     block_visit = []
+    is_in_backtrack = False
 
     size = 5
     center_idx = size ** 2 // 2
     center_x, center_z = center_idx % size, center_idx // size
     center_block_offset = [((i % size) - center_x, center_z - (i // size)) for i in range(size**2)]
 
-    direction = ["up", "down", "left", "right"]
-    current_direction = direction[1]
+    direction = {"up": 0, "right": 1, "down": 2, "left": 3}
+    current_direction = direction["down"]
 
     while True:
         world_state = agent_host.getWorldState()
@@ -123,21 +144,22 @@ def algorithm(agent_host: AgentHost) -> None:
                 print("It seems like FullStat is not activated!")
                 break
 
+            block_visit.append((math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1, math.floor(observation["ZPos"])))
             # Check for air two blocks ahead of agent's level and below
-            front_block = observation["blocks"][(2 * 25) + (center_idx + (2 * size))]  # y=0, two blocks ahead
-            front_below_block = observation["blocks"][(1 * 25) + (center_idx + (2 * size))]   # y=-1, two blocks ahead
-            
-            if front_block == "air" and front_below_block == "air":
-                print("Danger! Air detected ahead at agent's level and below. Stopping!")
-                # Calculate and remove the front block coordinate from to_be_visited
-                front_xpos = math.floor(observation["XPos"]) - center_block_offset[center_idx + (2 * size)][0]
-                front_ypos = math.floor(observation["YPos"])
-                front_zpos = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (2 * size)][1]
-                front_block_coord = (front_xpos, front_ypos, front_zpos)
-                if front_block_coord in to_be_visited:
-                    to_be_visited.remove(front_block_coord)
-                agent_host.sendCommand("move 0")
-                break
+            # front_block = observation["blocks"][(2 * 25) + (center_idx + (2 * size))]  # y=0, two blocks ahead
+            # front_below_block = observation["blocks"][(1 * 25) + (center_idx + (2 * size))]   # y=-1, two blocks ahead
+            #
+            # if front_block == "air" and front_below_block == "air":
+            #     print("Danger! Air detected ahead at agent's level and below. Stopping!")
+            #     # Calculate and remove the front block coordinate from to_be_visited
+            #     front_xpos = math.floor(observation["XPos"]) - center_block_offset[center_idx + (2 * size)][0]
+            #     front_ypos = math.floor(observation["YPos"])
+            #     front_zpos = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (2 * size)][1]
+            #     front_block_coord = (front_xpos, front_ypos, front_zpos)
+            #     if front_block_coord in to_be_visited:
+            #         to_be_visited.remove(front_block_coord)
+            #     agent_host.sendCommand("move 0")
+            #     break
 
             # print("{} | {} | {}".format(observation["XPos"], observation["YPos"], observation["ZPos"]))
             for i in range(size ** 2):
@@ -163,7 +185,7 @@ def algorithm(agent_host: AgentHost) -> None:
                     if curr_block_coord not in visited_block_coord and curr_block_coord not in to_be_visited:
                         to_be_visited.add(curr_block_coord)
                 except IndexError:
-                    print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 4)!")
+                    print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 6)!")
                     return
 
             print("\nVisited Blocks:", list(visited_block_coord))
@@ -174,6 +196,33 @@ def algorithm(agent_host: AgentHost) -> None:
                 print("No more blocks to explore to! Exiting loop...")
                 agent_host.sendCommand("move 0")
                 break
+
+            is_forward_cleared = check_clearance(block_visit[-1], current_direction % 4, to_be_visited)
+            if not is_forward_cleared:
+                is_left_cleared = check_clearance(block_visit[-1], current_direction - 1 % 4, to_be_visited)
+                is_right_cleared = check_clearance(block_visit[-1], current_direction + 1 % 4, to_be_visited)
+
+                # Adjust agent to the center block as it doesn't stop immediately.
+                agent_host.sendCommand("move 0")
+                time.sleep(0.2)
+                agent_host.sendCommand("tp {} {} {}".format(block_visit[-1][0] + 0.5, block_visit[-1][1] + 1, block_visit[-1][2] + 0.5))
+
+                # FIXME: Updated direction does "random" things.
+                if is_left_cleared:
+                    current_direction -= 1 % 4
+                    agent_host.sendCommand("turn -1")
+                    time.sleep(1)
+                elif is_right_cleared:
+                    current_direction += 1 % 4
+                    agent_host.sendCommand("turn 1")
+                    time.sleep(1)
+                else:
+                    is_in_backtrack = True
+                    agent_host.sendCommand("turn -1")
+                    time.sleep(2)
+                    print("To Be Continued...")
+                    break
+                agent_host.sendCommand("turn 0")
 
             agent_host.sendCommand("move 1")
             time.sleep(1 / 4.317)
