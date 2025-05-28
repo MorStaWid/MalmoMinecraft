@@ -24,7 +24,7 @@ from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
 # Define the current test environment to use
-INSERT_STRING_HERE = "Large Room Corridor"
+INSERT_STRING_HERE = "Up and Down Stairs"
 
 # Dictionary containing all available test environments and their starting coordinates
 # Format: "Environment Name": (x, y, z) coordinates
@@ -45,14 +45,7 @@ OPTIONS = {
     "Portal Room Detection": (-65, 14, 0) # Portal detection test
 }
 
-TURNS = {
-    "none",
-    "edge",
-    "wall",
-    "left_corner",
-    "right_corner",
-    "blocked_middle"
-}
+first_check = False;
 
 def run_xml_mission():
     """
@@ -252,13 +245,14 @@ def yaw_to_direction(yaw):
         return "E"   # Facing +X (East)
     return "unknown"
 
-def need_to_turn(agent_host, current_direction, direction, observation, center_idx, center_block_offset, to_be_visited, visited_block_coord, size):
+def if_ledge(agent_host, current_direction, direction, observation, center_idx, center_block_offset, to_be_visited, visited_block_coord, size):
     """
-    Turns the agent to a new direction and checks for ledges.
+    Checks if there is a ledge in front of the agent and stops if detected.
     Ensures current_direction matches the agent's yaw.
-    Stops the agent if a ledge is detected.
-    Returns: updated current_direction, turn_type (from TURNS set)
+    Returns: (current_direction, has_ledge) where has_ledge is True if a ledge was detected
     """
+    global first_check
+    
     # 1. Update current_direction based on agent's current yaw
     yaw = observation.get("Yaw", 0)
     agent_direction = yaw_to_direction(yaw)
@@ -271,8 +265,31 @@ def need_to_turn(agent_host, current_direction, direction, observation, center_i
     front_below_block_two = observation["blocks"][(2 * 25) + (center_idx + (2 * size))] # y=-1, two blocks ahead
     front_below_stair = observation["blocks"][(1 * 25) + (center_idx + (1 * size))] # y=-2, one blocks ahead
 
-    if front_below_block_two == "air" and front_below_block == "air" and  front_below_stair == "air":
-        print("Danger! Air detected ahead at agent's level and below. Stopping!")
+    # Calculate coordinates for each block
+    front_below_x = math.floor(observation["XPos"]) - center_block_offset[center_idx + (1 * size)][0]
+    front_below_y = math.floor(observation["YPos"]) - 1
+    front_below_z = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (1 * size)][1]
+
+    front_below_two_x = math.floor(observation["XPos"]) - center_block_offset[center_idx + (2 * size)][0]
+    front_below_two_y = math.floor(observation["YPos"]) - 1
+    front_below_two_z = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (2 * size)][1]
+
+    front_below_stair_x = math.floor(observation["XPos"]) - center_block_offset[center_idx + (1 * size)][0]
+    front_below_stair_y = math.floor(observation["YPos"]) - 2
+    front_below_stair_z = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (1 * size)][1]
+
+    print("\nBlock Information:")
+    print(f"front_below_block: ({front_below_x}, {front_below_y}, {front_below_z}) - Type: {front_below_block}")
+    print(f"front_below_block_two: ({front_below_two_x}, {front_below_two_y}, {front_below_two_z}) - Type: {front_below_block_two}")
+    print(f"front_below_stair: ({front_below_stair_x}, {front_below_stair_y}, {front_below_stair_z}) - Type: {front_below_stair}\n")
+
+    if front_below_block_two == "stone_stairs" or front_below_block == "stone_stairs" or  front_below_stair == "stone_stairs":
+        first_check = True;
+        print("first_check is true in the checking for stairs check\n")
+
+    if front_below_block_two == "air" and front_below_block == "air" and  front_below_stair == "air" and first_check == True:
+        print("first_check is true in the first check\n")
+        print("Danger! Air detected ahead at front_below_block_two, front_below_block and front_below_stair. Stopping!")
         log_block_observations(visited_block_coord, to_be_visited, observation)
         # Calculate and remove the front block coordinate from to_be_visited
         front_xpos = math.floor(observation["XPos"]) - center_block_offset[center_idx + (2 * size)][0]
@@ -283,10 +300,12 @@ def need_to_turn(agent_host, current_direction, direction, observation, center_i
             to_be_visited.remove(front_block_coord)
             print(f"Removed front_block_coord:{front_block_coord} from to_be_visited")
         agent_host.sendCommand("move 0")  # Stop movement
-        return current_direction, "edge"  # Return edge from TURNS
+        first_check = True;
+        return current_direction, True
     
-    elif front_below_block_two == "air":
-        print("Danger! Air detected ahead at agent's level and below. Stopping!")
+    if front_below_block_two == "air" and first_check == False:
+        print("first_check is false in the second check\n")
+        print("Danger! Air detected ahead at front_below_block_two. Stopping!")
         log_block_observations(visited_block_coord, to_be_visited, observation)
         # Calculate and remove the front block coordinate from to_be_visited
         front_xpos = math.floor(observation["XPos"]) - center_block_offset[center_idx + (2 * size)][0]
@@ -297,48 +316,9 @@ def need_to_turn(agent_host, current_direction, direction, observation, center_i
             to_be_visited.remove(front_block_coord)
             print(f"Removed front_block_coord:{front_block_coord} from to_be_visited")
         agent_host.sendCommand("move 0")  # Stop movement
-        return current_direction, "edge"  # Return edge from TURNS
+        return current_direction, True
 
-    return current_direction, "none"  # Return none from TURNS if no turn needed
-
-def turn_action(agent_host, turn_type, current_direction, direction, observation):
-    """
-    Handles different types of turning actions for the agent.
-    
-    Parameters:
-        agent_host (AgentHost): Malmo agent host instance
-        turn_type (str): Type of turn to perform (from TURNS set)
-        current_direction (str): Current direction the agent is facing
-        direction (list): List of possible directions
-        observation (dict): Current observation data
-        
-    Returns:
-        str: Updated current direction after turn
-    """
-    if turn_type not in TURNS:
-        return current_direction  # Return unchanged if invalid turn type
-
-    if turn_type == "edge":
-        # Step back one block
-        agent_host.sendCommand("move -1")  # Move backward
-        time.sleep(1 / 4.317)  # Wait for movement to complete
-        
-        # Turn 180 degrees
-        agent_host.sendCommand("turn 1")  # Turn right
-        time.sleep(0.5)  # Wait for turn to complete
-        agent_host.sendCommand("turn 1")  # Turn right again
-        time.sleep(0.5)  # Wait for turn to complete
-        # Update current direction (opposite of previous)
-        if current_direction == "N":
-            return "S"
-        elif current_direction == "S":
-            return "N"
-        elif current_direction == "E":
-            return "W"
-        elif current_direction == "W":
-            return "E"
-    
-    return current_direction  # Return unchanged direction if no turn was made
+    return current_direction, False
 
 def algorithm(agent_host: AgentHost) -> None:
     """
@@ -434,7 +414,7 @@ def algorithm(agent_host: AgentHost) -> None:
                 break
 
             # Move agent forward
-            current_direction, turn_type = need_to_turn(
+            current_direction, has_ledge = if_ledge(
                 agent_host,
                 current_direction,
                 direction,
@@ -445,9 +425,11 @@ def algorithm(agent_host: AgentHost) -> None:
                 visited_block_coord,
                 size
             )
-            if turn_type != "none":
-                current_direction = turn_action(agent_host, turn_type, current_direction, direction, observation)
-                continue
+
+            # If ledge detected, stop the algorithm completely
+            if has_ledge:
+                print("Ledge detected. Stopping algorithm completely.")
+                break
 
             # Move agent forward
             agent_host.sendCommand("move 1")  # Send move command
