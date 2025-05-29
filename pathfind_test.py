@@ -47,7 +47,7 @@ def run_xml_mission():
             </ServerInitialConditions> 
             <ServerHandlers>
                 <FileWorldGenerator src="C:\\Malmo\\Minecraft\\run\\saves\\Algorithm World Test"/>
-                <ServerQuitFromTimeUp timeLimitMs="10000"/>
+                <ServerQuitFromTimeUp timeLimitMs="15000"/>
                 <ServerQuitWhenAnyAgentFinishes/>
             </ServerHandlers>
         </ServerSection>
@@ -104,10 +104,11 @@ def check_clearance(curr_block_coord, current_direction: int, to_be_visited: set
                 if (curr_block_coord[0] + i, curr_block_coord[1] + y, curr_block_coord[2] - 2) in to_be_visited:
                     return True
             elif current_direction == 3:    # Left
-                if (curr_block_coord[0] + 2, curr_block_coord[1] + y, curr_block_coord[2] + i) in to_be_visited:
+                if (curr_block_coord[0] - 2, curr_block_coord[1] + y, curr_block_coord[2] + i) in to_be_visited:
+                    print("EEEEEEEEEEEEEEEE")
                     return True
             elif current_direction == 1:    # Right
-                if (curr_block_coord[0] - 2, curr_block_coord[1] + y, curr_block_coord[2] + i) in to_be_visited:
+                if (curr_block_coord[0] + 2, curr_block_coord[1] + y, curr_block_coord[2] + i) in to_be_visited:
                     return True
 
     return False
@@ -145,6 +146,9 @@ def algorithm(agent_host: AgentHost) -> None:
                 break
 
             block_visit.append((math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1, math.floor(observation["ZPos"])))
+            if is_in_backtrack:
+                # TODO: Using stack data structure, pop the stack and continue walking forward (or side) until another to_be_visited is found! Else clause may be added before for loop!
+                pass
             # Check for air two blocks ahead of agent's level and below
             # front_block = observation["blocks"][(2 * 25) + (center_idx + (2 * size))]  # y=0, two blocks ahead
             # front_below_block = observation["blocks"][(1 * 25) + (center_idx + (2 * size))]   # y=-1, two blocks ahead
@@ -170,7 +174,7 @@ def algorithm(agent_host: AgentHost) -> None:
                 if y_elevation_offset is None:
                     continue
 
-                curr_xpos = math.floor(observation["XPos"]) - center_block_offset[i][0]
+                curr_xpos = math.floor(observation["XPos"]) + center_block_offset[i][0]
                 curr_ypos = math.floor(observation["YPos"] + y_elevation_offset - 1)
                 curr_zpos = math.floor(observation["ZPos"]) - center_block_offset[i][1]
                 curr_block_coord = (curr_xpos, curr_ypos, curr_zpos)
@@ -199,28 +203,31 @@ def algorithm(agent_host: AgentHost) -> None:
 
             is_forward_cleared = check_clearance(block_visit[-1], current_direction % 4, to_be_visited)
             if not is_forward_cleared:
-                is_left_cleared = check_clearance(block_visit[-1], current_direction - 1 % 4, to_be_visited)
-                is_right_cleared = check_clearance(block_visit[-1], current_direction + 1 % 4, to_be_visited)
+                is_left_cleared = check_clearance(block_visit[-1], (current_direction - 1) % 4, to_be_visited)
+                is_right_cleared = check_clearance(block_visit[-1], (current_direction + 1) % 4, to_be_visited)
 
                 # Adjust agent to the center block as it doesn't stop immediately.
                 agent_host.sendCommand("move 0")
                 time.sleep(0.2)
                 agent_host.sendCommand("tp {} {} {}".format(block_visit[-1][0] + 0.5, block_visit[-1][1] + 1, block_visit[-1][2] + 0.5))
 
-                # FIXME: Updated direction does "random" things.
                 if is_left_cleared:
-                    current_direction -= 1 % 4
+                    current_direction = (current_direction - 1) % 4
                     agent_host.sendCommand("turn -1")
                     time.sleep(1)
                 elif is_right_cleared:
-                    current_direction += 1 % 4
+                    current_direction = (current_direction + 1) % 4
                     agent_host.sendCommand("turn 1")
                     time.sleep(1)
                 else:
                     is_in_backtrack = True
                     agent_host.sendCommand("turn -1")
                     time.sleep(2)
+
+                    # Temp placeholder. Agent just moves forward for now. Will be removed in the future!
                     print("To Be Continued...")
+                    agent_host.sendCommand("turn 0")
+                    agent_host.sendCommand("move 1")
                     break
                 agent_host.sendCommand("turn 0")
 
