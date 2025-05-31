@@ -10,7 +10,7 @@ import time
 from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
-INSERT_STRING_HERE = "Large Room Corridor"
+INSERT_STRING_HERE = "Up and Down Stairs"
 
 OPTIONS = {
     "Block Surround": (0, 14, -9),
@@ -67,7 +67,7 @@ def run_xml_mission():
                 <ObservationFromGrid>
                     <Grid name="blocks">
                         <min x="-2" y="-3" z="-2"/>
-                        <max x="2" y="2" z="2"/>
+                        <max x="2" y="3" z="2"/>
                     </Grid>
                 </ObservationFromGrid>
                 <AbsoluteMovementCommands/>
@@ -85,9 +85,9 @@ def run_xml_mission():
 # above is air or other acceptable blocks, we return the y offset. The purpose is to check for downward and upward blocks around.
 def get_y_elevation_offset(observation: dict, index: int, size: int) -> int | None:
     y = None
-    accepted_above_block = {"air", "door", "iron_door"}
-    for i in range(len(observation["blocks"]) // (size ** 2) - 1):
-        if observation["blocks"][(i * 25) + index] != "air" and observation["blocks"][(i + 1) * 25 + index] in accepted_above_block:
+    accepted_above_block = {"air", "door", "iron_door", "brown_mushroom", "red_mushroom"}
+    for i in range(len(observation["blocks"]) // (size ** 2) - 2):
+        if observation["blocks"][(i * 25) + index] != "air" and observation["blocks"][(i + 1) * 25 + index] in accepted_above_block and observation["blocks"][(i + 2) * 25 + index] in accepted_above_block:
             y = i - 2
 
     return y
@@ -296,7 +296,7 @@ def algorithm(agent_host: AgentHost) -> None:
             agent_host.sendCommand("move 1")
 
             # FIXME: Due to agent's over/under rotate, it can sometimes skip a block. Dividing twice would resolve but still creates problem for stairs and slabs!
-            time.sleep((1 / 4.317) / 2)
+            time.sleep((1 / 4.317))
 
 
 def main():
