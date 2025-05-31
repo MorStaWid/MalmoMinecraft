@@ -138,6 +138,9 @@ def go_up_spiral_staircase(agent_host: AgentHost, structure_direction: str) -> N
     # Same concept as above.
     pass
 
+def is_agent_in_block(observation: dict) -> bool:
+    """If the agent appears to be in block on the grid, do not proceed! Also helps resolve stair/slab issues!"""
+    return observation["blocks"][87] != "air"
 
 def algorithm(agent_host: AgentHost) -> None:
     visited_block_coord = set()
@@ -178,6 +181,9 @@ def algorithm(agent_host: AgentHost) -> None:
             if "XPos" not in observation or "YPos" not in observation or "ZPos" not in observation:
                 print("It seems like FullStat is not activated!")
                 break
+
+            if is_agent_in_block(observation):
+                continue
 
             auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
             if is_in_backtrack:
@@ -296,7 +302,7 @@ def algorithm(agent_host: AgentHost) -> None:
             agent_host.sendCommand("move 1")
 
             # FIXME: Due to agent's over/under rotate, it can sometimes skip a block. Dividing twice would resolve but still creates problem for stairs and slabs!
-            time.sleep((1 / 4.317))
+            time.sleep(0.1)
 
 
 def main():
