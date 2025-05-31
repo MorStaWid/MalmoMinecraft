@@ -247,7 +247,6 @@ def algorithm(agent_host: AgentHost) -> None:
                     if y_elevation_offset is None:
                         continue
 
-                    # TODO: Attempt to resolve "floating" agent when on stairs!
                     curr_xpos = math.floor(observation["XPos"]) + center_block_offset[i][0]
                     curr_ypos = math.floor(observation["YPos"] + y_elevation_offset - 1)
                     curr_zpos = math.floor(observation["ZPos"]) - center_block_offset[i][1]
@@ -301,7 +300,6 @@ def algorithm(agent_host: AgentHost) -> None:
             print("------------------------------------------------------------------")
             agent_host.sendCommand("move 1")
 
-            # FIXME: Due to agent's over/under rotate, it can sometimes skip a block. Dividing twice would resolve but still creates problem for stairs and slabs!
             time.sleep(0.1)
 
 
