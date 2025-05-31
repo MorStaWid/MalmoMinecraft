@@ -10,7 +10,7 @@ import time
 from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
-INSERT_STRING_HERE = "3x3 Basic Pathfind"
+INSERT_STRING_HERE = "Large Room Corridor"
 
 OPTIONS = {
     "Block Surround": (0, 14, -9),
@@ -47,7 +47,7 @@ def run_xml_mission():
             </ServerInitialConditions> 
             <ServerHandlers>
                 <FileWorldGenerator src="C:\\Malmo\\Minecraft\\run\\saves\\Algorithm World Test"/>
-                <ServerQuitFromTimeUp timeLimitMs="15000"/>
+                <ServerQuitFromTimeUp timeLimitMs="40000"/>
                 <ServerQuitWhenAnyAgentFinishes/>
             </ServerHandlers>
         </ServerSection>
@@ -93,31 +93,56 @@ def get_y_elevation_offset(observation: dict, index: int, size: int) -> int | No
     return y
 
 def check_clearance(curr_block_coord, current_direction: int, to_be_visited: set) -> bool:
-    print(curr_block_coord)
-    for i in range(-1, 2):
-        # Up to 3. No need to check upper block.
-        for y in range(-2, 3):
-            if current_direction == 2:      # Down
-                if (curr_block_coord[0] + i, curr_block_coord[1] + y, curr_block_coord[2] + 2) in to_be_visited:
-                    return True
-            elif current_direction == 0:    # Up
-                if (curr_block_coord[0] + i, curr_block_coord[1] + y, curr_block_coord[2] - 2) in to_be_visited:
-                    return True
-            elif current_direction == 3:    # Left
-                if (curr_block_coord[0] - 2, curr_block_coord[1] + y, curr_block_coord[2] + i) in to_be_visited:
-                    print("EEEEEEEEEEEEEEEE")
-                    return True
-            elif current_direction == 1:    # Right
-                if (curr_block_coord[0] + 2, curr_block_coord[1] + y, curr_block_coord[2] + i) in to_be_visited:
-                    return True
+    direction_offset = {
+        0: (0, -2),
+        1: (2, 0),
+        2: (0, 2),
+        3: (-2, 0),
+    }
+    x_offset, z_offset = direction_offset[current_direction]
+    for y_offset in range(-2, 3):
+        check_pos = (curr_block_coord[0] + x_offset, curr_block_coord[1] + y_offset, curr_block_coord[2] + z_offset)
+        if check_pos in to_be_visited:
+            return True
 
     return False
+
+def auto_correct_yaw(agent_host: AgentHost, yaw: float, current_direction: int) -> None:
+    """Attempt the agent to align to its perfect yaw as there's a chance it can over-rotate or under-rotate!"""
+    yaw_def = {
+        0: 180,
+        1: 270,
+        2: 0,
+        3: 90,
+    }
+    margin_threshold = 0.5
+
+    # THIS SHIT DOES NOT RECOGNIZE YAW AND PITCH! AM I FUCKING DREAMING?!!!!!!!!!!
+    # agent_host.sendCommand("chat /tp ~ ~ ~ {} ~".format(yaw_def[current_direction]))
+
+    curr_yaw = yaw % 360
+    counterclockwise_err_margin = (curr_yaw - yaw_def[current_direction]) % 360
+    clockwise_err_margin = (yaw_def[current_direction] - curr_yaw) % 360
+    if counterclockwise_err_margin <= margin_threshold or clockwise_err_margin <= margin_threshold:
+        return
+    agent_host.sendCommand("turn {}".format(1 if clockwise_err_margin <= counterclockwise_err_margin else -1))
+    turn_time = (clockwise_err_margin if clockwise_err_margin <= counterclockwise_err_margin else counterclockwise_err_margin) / 90
+    time.sleep(turn_time)
+    agent_host.sendCommand("turn 0")
+
+def go_down_spiral_staircase(agent_host: AgentHost, structure_direction: str) -> None:
+    # TODO: Uses a fixed instructions to tell an agent to go down spiral. Does not store coords during this operation!
+    pass
+
+def go_up_spiral_staircase(agent_host: AgentHost, structure_direction: str) -> None:
+    # Same concept as above.
+    pass
+
 
 def algorithm(agent_host: AgentHost) -> None:
     visited_block_coord = set()
     to_be_visited = set()
 
-    # TODO: For single block stack. Just like DFS, we will use to backtrack if an agent reaches a dead end.
     block_visit = []
     is_in_backtrack = False
 
@@ -126,13 +151,22 @@ def algorithm(agent_host: AgentHost) -> None:
     center_x, center_z = center_idx % size, center_idx // size
     center_block_offset = [((i % size) - center_x, center_z - (i // size)) for i in range(size**2)]
 
-    direction = {"up": 0, "right": 1, "down": 2, "left": 3}
-    current_direction = direction["down"]
+    direction = {"N": 0, "E": 1, "S": 2, "W": 3}
+    current_direction = direction["S"]
+
+    turn_map = {
+        2: {1: 1, -1: -1},  # S
+        0: {-1: 1, 1: -1},  # N
+        3: {1: 1, -1: -1},  # W
+        1: {-1: 1, 1: -1},  # E
+    }
 
     while True:
         world_state = agent_host.getWorldState()
+        if not world_state.is_mission_running:
+            break
 
-        if world_state.is_mission_running and world_state.number_of_observations_since_last_state > 0:
+        if world_state.number_of_observations_since_last_state > 0:
             observation = json.loads(world_state.observations[-1].text)
             # print(observation)
             # Check for grid activation. Will not proceed gameloop if not found.
@@ -145,97 +179,125 @@ def algorithm(agent_host: AgentHost) -> None:
                 print("It seems like FullStat is not activated!")
                 break
 
-            block_visit.append((math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1, math.floor(observation["ZPos"])))
+            auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
             if is_in_backtrack:
-                # TODO: Using stack data structure, pop the stack and continue walking forward (or side) until another to_be_visited is found! Else clause may be added before for loop!
-                pass
-            # Check for air two blocks ahead of agent's level and below
-            # front_block = observation["blocks"][(2 * 25) + (center_idx + (2 * size))]  # y=0, two blocks ahead
-            # front_below_block = observation["blocks"][(1 * 25) + (center_idx + (2 * size))]   # y=-1, two blocks ahead
-            #
-            # if front_block == "air" and front_below_block == "air":
-            #     print("Danger! Air detected ahead at agent's level and below. Stopping!")
-            #     # Calculate and remove the front block coordinate from to_be_visited
-            #     front_xpos = math.floor(observation["XPos"]) - center_block_offset[center_idx + (2 * size)][0]
-            #     front_ypos = math.floor(observation["YPos"])
-            #     front_zpos = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (2 * size)][1]
-            #     front_block_coord = (front_xpos, front_ypos, front_zpos)
-            #     if front_block_coord in to_be_visited:
-            #         to_be_visited.remove(front_block_coord)
-            #     agent_host.sendCommand("move 0")
-            #     break
+                curr_block = block_visit.pop()
+                is_forward_cleared = check_clearance(curr_block, current_direction % 4, to_be_visited)
+                if is_forward_cleared:
+                    is_in_backtrack = False
+                    continue
+                is_left_cleared = check_clearance(curr_block, (current_direction - 1) % 4, to_be_visited)
+                is_right_cleared = check_clearance(curr_block, (current_direction + 1) % 4, to_be_visited)
+                curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
 
-            # print("{} | {} | {}".format(observation["XPos"], observation["YPos"], observation["ZPos"]))
-            for i in range(size ** 2):
-                r_edge, c_edge = divmod(i, size)
-                is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1       # For stack
-
-                y_elevation_offset = get_y_elevation_offset(observation, i, size)
-                if y_elevation_offset is None:
+                if curr_turn != 0:
+                    # Adjust agent to the center block as it doesn't stop immediately.
+                    agent_host.sendCommand("move 0")
+                    time.sleep(0.2)
+                    agent_host.sendCommand(
+                        "tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1, curr_block[2] + 0.5))
+                    current_direction = (current_direction + curr_turn) % 4
+                    agent_host.sendCommand("turn {}".format(curr_turn))
+                    time.sleep(1)
+                    agent_host.sendCommand("turn 0")
+                    # auto_correct_yaw(agent_host, current_direction)
+                    is_in_backtrack = False
                     continue
 
-                curr_xpos = math.floor(observation["XPos"]) + center_block_offset[i][0]
-                curr_ypos = math.floor(observation["YPos"] + y_elevation_offset - 1)
-                curr_zpos = math.floor(observation["ZPos"]) - center_block_offset[i][1]
-                curr_block_coord = (curr_xpos, curr_ypos, curr_zpos)
-                try:
-                    if not is_around_edge:
-                        if curr_block_coord not in visited_block_coord:
-                            visited_block_coord.add(curr_block_coord)
-                            if curr_block_coord in to_be_visited:
-                                to_be_visited.remove(curr_block_coord)
+                if len(block_visit) == 0:
+                    print("DEBUG: This agent is now all the way back to the beginning!")
+                    is_in_backtrack = False
+                    break
+
+                prev_block = block_visit[-1]
+                x_diff = curr_block[0] - prev_block[0]
+                z_diff = curr_block[2] - prev_block[2]
+                if current_direction in [0, 2]:
+                    diff = x_diff
+                elif current_direction in [1, 3]:
+                    diff = z_diff
+                else:
+                    print("ERROR: Unknown direction ID")
+                    diff = 0
+
+                if diff in turn_map[current_direction]:
+                    turn = turn_map[current_direction][diff]
+                    agent_host.sendCommand("move 0")
+                    time.sleep(0.2)
+                    agent_host.sendCommand("tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1,
+                                                                curr_block[2] + 0.5))
+                    agent_host.sendCommand("turn {}".format(turn))
+                    time.sleep(1)
+                    agent_host.sendCommand("turn 0")
+                    current_direction = (current_direction + turn) % 4
+            else:
+                block_visit.append((math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
+                                    math.floor(observation["ZPos"])))
+                for i in range(size ** 2):
+                    r_edge, c_edge = divmod(i, size)
+                    is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1       # For stack
+
+                    y_elevation_offset = get_y_elevation_offset(observation, i, size)
+                    if y_elevation_offset is None:
                         continue
 
-                    if curr_block_coord not in visited_block_coord and curr_block_coord not in to_be_visited:
-                        to_be_visited.add(curr_block_coord)
-                except IndexError:
-                    print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 6)!")
-                    return
+                    # TODO: Attempt to resolve "floating" agent when on stairs!
+                    curr_xpos = math.floor(observation["XPos"]) + center_block_offset[i][0]
+                    curr_ypos = math.floor(observation["YPos"] + y_elevation_offset - 1)
+                    curr_zpos = math.floor(observation["ZPos"]) - center_block_offset[i][1]
+                    curr_block_coord = (curr_xpos, curr_ypos, curr_zpos)
+                    try:
+                        if not is_around_edge:
+                            if curr_block_coord not in visited_block_coord:
+                                visited_block_coord.add(curr_block_coord)
+                                if curr_block_coord in to_be_visited:
+                                    to_be_visited.remove(curr_block_coord)
+                            continue
+
+                        if curr_block_coord not in visited_block_coord and curr_block_coord not in to_be_visited:
+                            to_be_visited.add(curr_block_coord)
+                    except IndexError:
+                        print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 6)!")
+                        return
+
+                # assert len(to_be_visited) == 3
+                if len(to_be_visited) <= 0:
+                    print("No more blocks to explore to! Exiting loop...")
+                    agent_host.sendCommand("move 0")
+                    break
+
+                is_forward_cleared = check_clearance(block_visit[-1], current_direction % 4, to_be_visited)
+                if not is_forward_cleared:
+                    is_left_cleared = check_clearance(block_visit[-1], (current_direction - 1) % 4, to_be_visited)
+                    is_right_cleared = check_clearance(block_visit[-1], (current_direction + 1) % 4, to_be_visited)
+                    curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
+
+                    # Adjust agent to the center block as it doesn't stop immediately.
+                    agent_host.sendCommand("move 0")
+                    time.sleep(0.2)
+                    agent_host.sendCommand("tp {} {} {}".format(block_visit[-1][0] + 0.5, block_visit[-1][1] + 1, block_visit[-1][2] + 0.5))
+
+                    if curr_turn != 0:
+                        current_direction = (current_direction + curr_turn) % 4
+                        agent_host.sendCommand("turn {}".format(curr_turn))
+                        time.sleep(1)
+                    else:
+                        is_in_backtrack = True
+                        current_direction = (current_direction + 2) % 4
+                        agent_host.sendCommand("turn -1")
+                        time.sleep(2)
+                    agent_host.sendCommand("turn 0")
+                    # auto_correct_yaw(agent_host, current_direction)
 
             print("\nVisited Blocks:", list(visited_block_coord))
             print("To Be Visited:", list(to_be_visited))
+            print("Current Direction: ", current_direction)
             print("------------------------------------------------------------------")
-            # assert len(to_be_visited) == 3
-            if len(to_be_visited) <= 0:
-                print("No more blocks to explore to! Exiting loop...")
-                agent_host.sendCommand("move 0")
-                break
-
-            is_forward_cleared = check_clearance(block_visit[-1], current_direction % 4, to_be_visited)
-            if not is_forward_cleared:
-                is_left_cleared = check_clearance(block_visit[-1], (current_direction - 1) % 4, to_be_visited)
-                is_right_cleared = check_clearance(block_visit[-1], (current_direction + 1) % 4, to_be_visited)
-
-                # Adjust agent to the center block as it doesn't stop immediately.
-                agent_host.sendCommand("move 0")
-                time.sleep(0.2)
-                agent_host.sendCommand("tp {} {} {}".format(block_visit[-1][0] + 0.5, block_visit[-1][1] + 1, block_visit[-1][2] + 0.5))
-
-                if is_left_cleared:
-                    current_direction = (current_direction - 1) % 4
-                    agent_host.sendCommand("turn -1")
-                    time.sleep(1)
-                elif is_right_cleared:
-                    current_direction = (current_direction + 1) % 4
-                    agent_host.sendCommand("turn 1")
-                    time.sleep(1)
-                else:
-                    is_in_backtrack = True
-                    agent_host.sendCommand("turn -1")
-                    time.sleep(2)
-
-                    # Temp placeholder. Agent just moves forward for now. Will be removed in the future!
-                    print("To Be Continued...")
-                    agent_host.sendCommand("turn 0")
-                    agent_host.sendCommand("move 1")
-                    break
-                agent_host.sendCommand("turn 0")
-
             agent_host.sendCommand("move 1")
-            time.sleep(1 / 4.317)
 
-        if not world_state.is_mission_running:
-            break
+            # FIXME: Due to agent's over/under rotate, it can sometimes skip a block. Dividing twice would resolve but still creates problem for stairs and slabs!
+            time.sleep((1 / 4.317) / 2)
+
 
 def main():
     agent_host = MalmoPython.AgentHost()
