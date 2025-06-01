@@ -10,7 +10,7 @@ import time
 from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
-INSERT_STRING_HERE = "Up and Down Stairs"
+INSERT_STRING_HERE = "Large Room Corridor"
 
 OPTIONS = {
     "Block Surround": (0, 14, -9),
@@ -146,7 +146,7 @@ def algorithm(agent_host: AgentHost) -> None:
     visited_block_coord = set()
     to_be_visited = set()
 
-    block_visit = []
+    block_visit = [None]
     is_in_backtrack = False
 
     size = 5
@@ -183,6 +183,11 @@ def algorithm(agent_host: AgentHost) -> None:
                 break
 
             if is_agent_in_block(observation):
+                continue
+
+            # To prevent blocks stacking the same coords, this check will prevent duplicate tuple values.
+            if (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
+                                    math.floor(observation["ZPos"])) == block_visit[-1]:
                 continue
 
             auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
@@ -239,6 +244,7 @@ def algorithm(agent_host: AgentHost) -> None:
             else:
                 block_visit.append((math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
                                     math.floor(observation["ZPos"])))
+                # agent_host.sendCommand(f"chat /setblock {block_visit[-1][0]} {block_visit[-1][1]} {block_visit[-1][2]} minecraft:gold_block")
                 for i in range(size ** 2):
                     r_edge, c_edge = divmod(i, size)
                     is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1       # For stack
@@ -255,12 +261,16 @@ def algorithm(agent_host: AgentHost) -> None:
                         if not is_around_edge:
                             if curr_block_coord not in visited_block_coord:
                                 visited_block_coord.add(curr_block_coord)
+                                # agent_host.sendCommand(
+                                #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:emerald_block")
                                 if curr_block_coord in to_be_visited:
                                     to_be_visited.remove(curr_block_coord)
                             continue
 
                         if curr_block_coord not in visited_block_coord and curr_block_coord not in to_be_visited:
                             to_be_visited.add(curr_block_coord)
+                            # agent_host.sendCommand(
+                            #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:glowstone")
                     except IndexError:
                         print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 6)!")
                         return
