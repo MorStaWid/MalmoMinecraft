@@ -133,7 +133,7 @@ class Golly(object):
     # above is air or other acceptable blocks, we return the y offset. The purpose is to check for downward and upward blocks around.
     def get_y_elevation_offset(self, blocks: list, index: int, size: int) -> int | None:
         y = None
-        accepted_above_block = {"air", "door", "iron_door", "brown_mushroom", "red_mushroom", "torch"}
+        accepted_above_block = {"air", "wooden_door", "iron_door", "brown_mushroom", "red_mushroom", "torch"}
         for i in range(len(blocks) // (size ** 2) - 2):
             if blocks[(i * 25) + index] != "air" and blocks[(i + 1) * 25 + index] in accepted_above_block and blocks[(i + 2) * 25 + index] in accepted_above_block:
                 y = i - 2
@@ -186,9 +186,13 @@ class Golly(object):
         # Same concept as above.
         pass
 
-    def is_agent_in_block(self, blocks: list) -> bool:
-        """If the agent appears to be in block on the grid, do not proceed! Also helps resolve stair issues!"""
-        return blocks[87] != "air"
+    def is_agent_in_stairs(self, blocks: list) -> bool:
+        """If the agent appears to be in stairs on the grid, do not proceed! Also helps resolve stair issues!"""
+        return blocks[87].endswith("_stairs")
+
+    def adjust_to_center(self, blocks: list, current_direction: int) -> None:
+        """Make the agent center to its hallway for better navigation!"""
+        pass
 
     def navigate_portal_room(self) -> None:
         size = 5
@@ -224,15 +228,15 @@ class Golly(object):
                     print("It seems like FullStat is not activated!")
                     break
 
-                if self.is_agent_in_block(observation["blocks"]):
+                if self.is_agent_in_stairs(observation["blocks"]):
                     continue
 
-                self.auto_correct_yaw(observation["Yaw"], current_direction)
                 # To prevent blocks stacking the same coords, this check will prevent duplicate tuple values.
                 if (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
                     math.floor(observation["ZPos"])) == self.block_visit[-1]:
                     continue
 
+                self.auto_correct_yaw(observation["Yaw"], current_direction)
                 if self.is_in_backtrack:
                     curr_block = self.block_visit.pop()
                     is_forward_cleared = self.check_clearance(curr_block, current_direction % 4)
@@ -352,7 +356,6 @@ class Golly(object):
                 print("------------------------------------------------------------------")
                 self.agent_host.sendCommand("move 1")
 
-                time.sleep(0.1)
 
     def mine_hidden_path(self):
         pass
