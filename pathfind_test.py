@@ -86,7 +86,7 @@ def run_xml_mission():
 # above is air or other acceptable blocks, we return the y offset. The purpose is to check for downward and upward blocks around.
 def get_y_elevation_offset(blocks: list, index: int, size: int) -> int | None:
     y = None
-    accepted_above_block = {"air", "door", "iron_door", "brown_mushroom", "red_mushroom", "torch"}
+    accepted_above_block = {"air", "wooden_door", "iron_door", "brown_mushroom", "red_mushroom", "torch"}
     for i in range(len(blocks) // (size ** 2) - 2):
         if blocks[(i * 25) + index] != "air" and blocks[(i + 1) * 25 + index] in accepted_above_block and blocks[(i + 2) * 25 + index] in accepted_above_block:
             y = i - 2
@@ -139,9 +139,13 @@ def go_up_spiral_staircase(agent_host: AgentHost, structure_direction: str) -> N
     # Same concept as above.
     pass
 
-def is_agent_in_block(blocks: list) -> bool:
-    """If the agent appears to be in block on the grid, do not proceed! Also helps resolve stair issues!"""
-    return blocks[87] != "air"
+def is_agent_in_stairs(blocks: list) -> bool:
+    """If the agent appears to be in stairs on the grid, do not proceed! Also helps resolve stair issues!"""
+    return blocks[87].endswith("_stairs")
+
+def adjust_to_center(agent_host: AgentHost, blocks: list, current_direction: int) -> None:
+    """Make the agent center to its hallway for better navigation!"""
+    pass
 
 def algorithm(agent_host: AgentHost) -> None:
     visited_block_coord = set()
@@ -183,15 +187,15 @@ def algorithm(agent_host: AgentHost) -> None:
                 print("It seems like FullStat is not activated!")
                 break
 
-            if is_agent_in_block(observation["blocks"]):
+            if is_agent_in_stairs(observation["blocks"]):
                 continue
 
-            auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
             # To prevent blocks stacking the same coords, this check will prevent duplicate tuple values.
             if (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
                                     math.floor(observation["ZPos"])) == block_visit[-1]:
                 continue
 
+            auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
             if is_in_backtrack:
                 curr_block = block_visit.pop()
                 is_forward_cleared = check_clearance(curr_block, current_direction % 4, to_be_visited)
@@ -311,7 +315,6 @@ def algorithm(agent_host: AgentHost) -> None:
             print("------------------------------------------------------------------")
             agent_host.sendCommand("move 1")
 
-            time.sleep(0.1)
 
 
 def main():
