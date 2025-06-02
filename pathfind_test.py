@@ -10,13 +10,14 @@ import time
 from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
-INSERT_STRING_HERE = "Large Room Corridor"
+INSERT_STRING_HERE = "Chest Pathway"
 
 OPTIONS = {
     "Block Surround": (0, 14, -9),
     "1x1 Maze": (0, 14, 0),
     "3x3 Basic Pathfind": (-17, 14, 0),
     "Large Room Corridor": (-17, 14, 16),
+    "Chest Pathway": (-25, 14, 36),
     "Up and Down Stairs": (-33, 14, 0),
     "Up and Down Slabs": (-41, 14, 36),
     "Spiral Staircase": (-33, 14, 36),
@@ -83,11 +84,11 @@ def run_xml_mission():
 
 # Start from the bottom of the block x z and compute based on presence. If the initial block is "occupied" and the one
 # above is air or other acceptable blocks, we return the y offset. The purpose is to check for downward and upward blocks around.
-def get_y_elevation_offset(observation: dict, index: int, size: int) -> int | None:
+def get_y_elevation_offset(blocks: list, index: int, size: int) -> int | None:
     y = None
-    accepted_above_block = {"air", "door", "iron_door", "brown_mushroom", "red_mushroom"}
-    for i in range(len(observation["blocks"]) // (size ** 2) - 2):
-        if observation["blocks"][(i * 25) + index] != "air" and observation["blocks"][(i + 1) * 25 + index] in accepted_above_block and observation["blocks"][(i + 2) * 25 + index] in accepted_above_block:
+    accepted_above_block = {"air", "door", "iron_door", "brown_mushroom", "red_mushroom", "torch"}
+    for i in range(len(blocks) // (size ** 2) - 2):
+        if blocks[(i * 25) + index] != "air" and blocks[(i + 1) * 25 + index] in accepted_above_block and blocks[(i + 2) * 25 + index] in accepted_above_block:
             y = i - 2
 
     return y
@@ -138,9 +139,9 @@ def go_up_spiral_staircase(agent_host: AgentHost, structure_direction: str) -> N
     # Same concept as above.
     pass
 
-def is_agent_in_block(observation: dict) -> bool:
-    """If the agent appears to be in block on the grid, do not proceed! Also helps resolve stair/slab issues!"""
-    return observation["blocks"][87] != "air"
+def is_agent_in_block(blocks: list) -> bool:
+    """If the agent appears to be in block on the grid, do not proceed! Also helps resolve stair issues!"""
+    return blocks[87] != "air"
 
 def algorithm(agent_host: AgentHost) -> None:
     visited_block_coord = set()
@@ -182,15 +183,15 @@ def algorithm(agent_host: AgentHost) -> None:
                 print("It seems like FullStat is not activated!")
                 break
 
-            if is_agent_in_block(observation):
+            if is_agent_in_block(observation["blocks"]):
                 continue
 
+            auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
             # To prevent blocks stacking the same coords, this check will prevent duplicate tuple values.
             if (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
                                     math.floor(observation["ZPos"])) == block_visit[-1]:
                 continue
 
-            auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
             if is_in_backtrack:
                 curr_block = block_visit.pop()
                 is_forward_cleared = check_clearance(curr_block, current_direction % 4, to_be_visited)
@@ -249,7 +250,7 @@ def algorithm(agent_host: AgentHost) -> None:
                     r_edge, c_edge = divmod(i, size)
                     is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1       # For stack
 
-                    y_elevation_offset = get_y_elevation_offset(observation, i, size)
+                    y_elevation_offset = get_y_elevation_offset(observation["blocks"], i, size)
                     if y_elevation_offset is None:
                         continue
 
