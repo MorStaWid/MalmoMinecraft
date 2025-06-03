@@ -10,7 +10,7 @@ import time
 from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
-INSERT_STRING_HERE =  "Door Open"
+INSERT_STRING_HERE =  "Iron Door Open"
 
 OPTIONS = {
     "Block Surround": (0, 14, -9),
@@ -236,7 +236,7 @@ def adjust_to_center(agent_host: AgentHost, blocks: list, current_direction: int
     """Make the agent center to its hallway for better navigation!"""
     pass
 
-def find_button_near_door(blocks: list, size: int) -> tuple[int, int, int] | None:
+def find_button_near_door(blocks: list, size: int, observation: dict) -> tuple[int, int, int] | None:
     """
     Search for a stone button near the iron door in the observation grid.
     Returns the button's position (x, y, z) relative to the center if found, None otherwise.
@@ -314,7 +314,7 @@ def handle_door(agent_host: AgentHost, observation: dict, visited_block_coord: s
         
         # Check for button near the door
         if "blocks" in observation:
-            button_pos = find_button_near_door(observation["blocks"], 5)  # 5 is the grid size
+            button_pos = find_button_near_door(observation["blocks"], 5, observation)  # 5 is the grid size
             if button_pos:
                 print(f"Found button at relative position {button_pos}")
                 x, y, z = button_pos
@@ -324,26 +324,37 @@ def handle_door(agent_host: AgentHost, observation: dict, visited_block_coord: s
                 # Button is at (-40, 16, 21) relative to agent at (-41, 15, 20)
                 # So button is actually to the right (+x direction)
                 curr_turn = 0
-                if x > 0:  # Button is to the right
-                    curr_turn = 1
-                elif x < 0:  # Button is to the left  
-                    curr_turn = -1
+                if x > 0:  # Button is to the left
+                    curr_turn = -1.5
+                elif x < 0:  # Button is to the right
+                    curr_turn = 1.5
+                print(f"curr_turn: {curr_turn}")
                 
                 if curr_turn != 0:
+                    print(f"Turning {curr_turn} to face button...")
                     agent_host.sendCommand("turn {}".format(curr_turn))
-                    time.sleep(0.5)
+                    print("Sleeping for 0.15s after turn command...")
+                    time.sleep(0.15)
                 
-                # Press the button
+                print("Pressing button...")
                 agent_host.sendCommand("use 1")
-                time.sleep(0.5)
+                print("Sleeping for 0.05s after button press...")
+                time.sleep(0.05)
                 agent_host.sendCommand("use 0")
-                time.sleep(0.5)
+                print("Sleeping for 0.05s after button release...")
+                time.sleep(0.05)
                 
                 # Turn back to original direction
                 if curr_turn != 0:
+                    print(f"Turning back {-curr_turn} to original direction...")
                     agent_host.sendCommand("turn {}".format(-curr_turn))
-                    time.sleep(0.5)
+                    print("Sleeping for 0.25s after return turn...")
+                    time.sleep(0.25)
                     agent_host.sendCommand("turn 0")
+                    time.sleep(0.05)
+                    agent_host.sendCommand("move 2")
+
+                    print("Turn sequence complete")
                 return True
             else:
                 print("No button found near the iron door")
