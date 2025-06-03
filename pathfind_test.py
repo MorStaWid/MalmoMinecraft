@@ -1,17 +1,5 @@
-"""
-This file implements a pathfinding algorithm for Minecraft using the Malmo platform.
-It provides functionality to:
-1. Navigate through different test environments (mazes, rooms, corridors)
-2. Detect and avoid unsafe blocks (water, lava, air)
-3. Track visited and safe blocks for exploration
-4. Handle agent movement and environment observation
-The code uses a grid-based observation system to make navigation decisions.
-"""
-
-# Import necessary modules for future Python features
 from __future__ import annotations
 
-# Import required libraries for JSON handling, mathematical operations, and system functions
 import json
 import math
 import random
@@ -19,51 +7,31 @@ import re
 import sys
 import time
 
-# Import Malmo-specific modules for Minecraft integration
 from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
-# Define the current test environment to use
-INSERT_STRING_HERE = "Up and Down Stairs"
+INSERT_STRING_HERE =  "Door Open"
 
-# Dictionary containing all available test environments and their starting coordinates
-# Format: "Environment Name": (x, y, z) coordinates
 OPTIONS = {
-    "Block Surround": (0, 14, -9),        # Simple block arrangement
-    "1x1 Maze": (0, 14, 0),              # Basic maze layout
-    "3x3 Basic Pathfind": (-17, 14, 0),   # Larger pathfinding test
-    "Large Room Corridor": (-17, 14, 16), # Complex room with corridors
-    "Up and Down Stairs": (-33, 14, 0),   # Vertical movement test
-    "Up and Down Slabs": (-41, 14, 36),   # Slab-based vertical movement
-    "Spiral Staircase": (-33, 14, 36),    # Complex vertical navigation
-    "Door Open": (-41, 14, 0),           # Door interaction test
-    "Iron Door Open": (-41, 14, 17),     # Iron door interaction test
-    "Hidden Path": (-49, 14, 0),         # Path with hidden elements
-    "Slabbed Hidden Path": (-56, 14, 0), # Hidden path with slabs
-    "Five-way Crossing": (-60, 14, 21),  # Complex intersection test
-    "Fountain": (-59, 14, 45),           # Water feature navigation
-    "Portal Room Detection": (-65, 14, 0) # Portal detection test
+    "Block Surround": (0, 14, -9),
+    "1x1 Maze": (0, 14, 0),
+    "3x3 Basic Pathfind": (-17, 14, 0),
+    "Large Room Corridor": (-17, 14, 16),
+    "Chest Pathway": (-25, 14, 36),
+    "Up and Down Stairs": (-33, 14, 0),
+    "Up and Down Slabs": (-41, 14, 36),
+    "Spiral Staircase": (-33, 14, 36),
+    "Door Open": (-41, 14, 0),
+    "Iron Door Open": (-41, 14, 17),
+    "Hidden Path": (-49, 14, 0),
+    "Slabbed Hidden Path": (-56, 14, 0),
+    "Five-way Crossing": (-60, 14, 21),
+    "Fountain": (-59, 14, 45),
+    "Portal Room Detection": (-65, 14, 0)
 }
 
-first_check = False;
 
 def run_xml_mission():
-    """
-    Generates the XML mission specification for Malmo.
-    
-    Parameters:
-        None
-        
-    Returns:
-        str: Complete XML string for mission initialization
-        
-    This function creates the XML configuration that defines:
-    - Mission properties and time settings
-    - World generation parameters
-    - Agent properties and capabilities
-    - Observation and movement handlers
-    """
-    # Return the XML string with dynamic positioning based on selected environment
     return '''<?xml version="1.0" encoding="UTF-8" ?>
     <Mission xmlns="http://ProjectMalmo.microsoft.com" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
         <About>
@@ -80,7 +48,7 @@ def run_xml_mission():
             </ServerInitialConditions> 
             <ServerHandlers>
                 <FileWorldGenerator src="C:\\Malmo-0.37.0-Windows-64bit_withBoost_Python3.7\\Minecraft\\run\\saves\\Algorithm World Test"/>
-                <ServerQuitFromTimeUp timeLimitMs="10000"/>
+                <ServerQuitFromTimeUp timeLimitMs="40000"/>
                 <ServerQuitWhenAnyAgentFinishes/>
             </ServerHandlers>
         </ServerSection>
@@ -100,11 +68,11 @@ def run_xml_mission():
                 <ObservationFromGrid>
                     <Grid name="blocks">
                         <min x="-2" y="-3" z="-2"/>
-                        <max x="2" y="2" z="2"/>
+                        <max x="2" y="3" z="2"/>
                     </Grid>
                 </ObservationFromGrid>
                 <AbsoluteMovementCommands/>
-                <ContinuousMovementCommands turnSpeedDegs="180"/>
+                <ContinuousMovementCommands turnSpeedDegs="90"/>
                 <ChatCommands/>
                 <MissionQuitCommands/>
                 <AgentQuitFromTouchingBlockType>
@@ -113,35 +81,6 @@ def run_xml_mission():
             </AgentHandlers>
         </AgentSection>
     </Mission>'''
-
-def get_y_elevation_offset(observation: dict, index: int, size: int) -> int | None:
-    """
-    Calculates the vertical offset for a given block position.
-    
-    Parameters:
-        observation (dict): Dictionary containing block observations from the environment
-        index (int): Index of the block in the observation grid
-        size (int): Size of the observation grid
-        
-    Returns:
-        int | None: Vertical offset if a valid elevation is found, None otherwise
-        
-    This function analyzes the vertical structure of blocks to determine
-    safe navigation heights and detect elevation changes in the environment.
-    """
-    # Initialize the vertical offset as None
-    y = None
-    # Define blocks that are considered safe to have above the current block
-    accepted_above_block = { "door", "iron_door", "air"}
-    
-    # Iterate through vertical layers of the observation grid
-    for i in range(len(observation["blocks"]) // (size ** 2) - 1):
-        # Check if current block is solid and block above is acceptable
-        if observation["blocks"][(i * 25) + index] != "air" and observation["blocks"][(i + 1) * 25 + index] in accepted_above_block:
-            # Calculate the vertical offset (2 blocks below the current position) 
-            y = i - 2
-
-    return y
 
 def log_block_observations(visited_block_coord, to_be_visited, observation):
     """
@@ -231,286 +170,425 @@ def log_block_observations(visited_block_coord, to_be_visited, observation):
         
         f.write("\n" + "-"*50 + "\n")
         f.flush() # Ensure the file is written immediately
+
+# Start from the bottom of the block x z and compute based on presence. If the initial block is "occupied" and the one
+# above is air or other acceptable blocks, we return the y offset. The purpose is to check for downward and upward blocks around.
+def get_y_elevation_offset(blocks: list, index: int, size: int) -> int | None:
+    y = None
+    accepted_above_block = {"air", "wooden_door", "iron_door", "brown_mushroom", "red_mushroom", "torch"}
+    for i in range(len(blocks) // (size ** 2) - 2):
+        if blocks[(i * 25) + index] != "air" and blocks[(i + 1) * 25 + index] in accepted_above_block and blocks[(i + 2) * 25 + index] in accepted_above_block:
+            y = i - 2
+
+    return y
+
+def check_clearance(curr_block_coord, current_direction: int, to_be_visited: set) -> bool:
+    direction_offset = {
+        0: (0, -2),
+        1: (2, 0),
+        2: (0, 2),
+        3: (-2, 0),
+    }
+    x_offset, z_offset = direction_offset[current_direction]
+    for y_offset in range(-2, 3):
+        check_pos = (curr_block_coord[0] + x_offset, curr_block_coord[1] + y_offset, curr_block_coord[2] + z_offset)
+        if check_pos in to_be_visited:
+            return True
+
+    return False
+
+def auto_correct_yaw(agent_host: AgentHost, yaw: float, current_direction: int) -> None:
+    """Attempt the agent to align to its perfect yaw as there's a chance it can over-rotate or under-rotate!"""
+    yaw_def = {
+        0: 180,
+        1: 270,
+        2: 0,
+        3: 90,
+    }
+    margin_threshold = 0.5
+
+    # THIS SHIT DOES NOT RECOGNIZE YAW AND PITCH! AM I FUCKING DREAMING?!!!!!!!!!!
+    # agent_host.sendCommand("chat /tp ~ ~ ~ {} ~".format(yaw_def[current_direction]))
+
+    curr_yaw = yaw % 360
+    counterclockwise_err_margin = (curr_yaw - yaw_def[current_direction]) % 360
+    clockwise_err_margin = (yaw_def[current_direction] - curr_yaw) % 360
+    if counterclockwise_err_margin <= margin_threshold or clockwise_err_margin <= margin_threshold:
+        return
+    agent_host.sendCommand("turn {}".format(1 if clockwise_err_margin <= counterclockwise_err_margin else -1))
+    turn_time = (clockwise_err_margin if clockwise_err_margin <= counterclockwise_err_margin else counterclockwise_err_margin) / 90
+    time.sleep(turn_time)
+    agent_host.sendCommand("turn 0")
+
+def go_down_spiral_staircase(agent_host: AgentHost, structure_direction: str) -> None:
+    # TODO: Uses a fixed instructions to tell an agent to go down spiral. Does not store coords during this operation!
+    pass
+
+def go_up_spiral_staircase(agent_host: AgentHost, structure_direction: str) -> None:
+    # Same concept as above.
+    pass
+
+def is_agent_in_stairs(blocks: list) -> bool:
+    """If the agent appears to be in stairs on the grid, do not proceed! Also helps resolve stair issues!"""
+    return blocks[87].endswith("_stairs")
+
+def adjust_to_center(agent_host: AgentHost, blocks: list, current_direction: int) -> None:
+    """Make the agent center to its hallway for better navigation!"""
+    pass
+
+def find_button_near_door(blocks: list, size: int) -> tuple[int, int, int] | None:
+    """
+    Search for a stone button near the iron door in the observation grid.
+    Returns the button's position (x, y, z) relative to the center if found, None otherwise.
+    """
+    # The door is typically at y=0 level in the grid (agent's level)
+    door_y = 0
+    
+    # Search in a 3x3 area around the door position (which is typically in front of agent)
+    door_x, door_z = 0, 1  # One block in front of agent
+    
+    # Search in a 3x3 area around the door
+    for y in range(-1, 2):  # Check one block above and below
+        for x in range(-1, 2):  # Check one block on each side
+            for z in range(0, 3):  # Check from door position to 2 blocks ahead
+                # Calculate the index in the blocks array
+                # Convert relative coordinates to grid indices
+                grid_x = x + 2  # Shift x by 2 to center (0 -> 2)
+                grid_z = z + 2  # Shift z by 2 to center (0 -> 2)
+                grid_y = y + 3  # Shift y by 3 since y=0 is at index 75-99
+                
+                idx = (grid_y * size * size) + (grid_z * size) + grid_x
+                if 0 <= idx < len(blocks):
+                    block_type = blocks[idx]
+                    # Calculate absolute coordinates
+                    abs_x = math.floor(observation["XPos"]) + x
+                    abs_y = math.floor(observation["YPos"]) + y
+                    abs_z = math.floor(observation["ZPos"]) + z
+                    print(f"Checking coordinates - Relative: (x={x}, y={y}, z={z}), Absolute: (x={abs_x}, y={abs_y}, z={abs_z}), block type: {block_type}")
+                    if block_type == "stone_button":
+                        # Return relative position from center
+                        return (x, y, z)
+    
+    # If no button found in immediate vicinity, search in a wider area
+    for y in range(-2, 3):  # Check two blocks above and below
+        for x in range(-2, 3):  # Check two blocks on each side
+            for z in range(-1, 4):  # Check from one block behind to 3 blocks ahead
+                # Skip the inner 3x3 area we already checked
+                if -1 <= x <= 1 and 0 <= z <= 2:
+                    continue
+                    
+                # Convert relative coordinates to grid indices
+                grid_x = x + 2
+                grid_z = z + 2
+                grid_y = y + 3
+                
+                idx = (grid_y * size * size) + (grid_z * size) + grid_x
+                if 0 <= idx < len(blocks):
+                    block_type = blocks[idx]
+                    # Calculate absolute coordinates
+                    abs_x = math.floor(observation["XPos"]) + x
+                    abs_y = math.floor(observation["YPos"]) + y
+                    abs_z = math.floor(observation["ZPos"]) + z
+                    print(f"Checking coordinates - Relative: (x={x}, y={y}, z={z}), Absolute: (x={abs_x}, y={abs_y}, z={abs_z}), block type: {block_type}")
+                    if block_type == "stone_button":
+                        return (x, y, z)
+    
+    return None
+
+def handle_door(agent_host: AgentHost, observation: dict, visited_block_coord: set, to_be_visited: set) -> bool:
+    """
+    Handle door interaction if a door is detected in line of sight.
+    Returns True if a door was handled, False otherwise.
+    """
+    if "LineOfSight" not in observation:
+        return False
         
-def yaw_to_direction(yaw):
-    # Normalize yaw to [-180, 180)
-    yaw = ((yaw + 180) % 360) - 180
-    if -45 <= yaw < 45:
-        return "S"   # Facing +Z (South)
-    elif 45 <= yaw < 135:
-        return "W"   # Facing -X (West)
-    elif yaw >= 135 or yaw < -135:
-        return "N"   # Facing -Z (North)
-    elif -135 <= yaw < -45:
-        return "E"   # Facing +X (East)
-    return "unknown"
-
-def if_ledge(agent_host, current_direction, direction, observation, center_idx, center_block_offset, to_be_visited, visited_block_coord, size):
-    """
-    Checks if there is a ledge in front of the agent and stops if detected.
-    Ensures current_direction matches the agent's yaw.
-    Returns: (current_direction, has_ledge) where has_ledge is True if a ledge was detected
-    """
-    global first_check
+    block_type = observation["LineOfSight"].get("type", "")
+    distance = observation["LineOfSight"].get("distance", float('inf'))
     
-    # 1. Update current_direction based on agent's current yaw
-    yaw = observation.get("Yaw", 0)
-    agent_direction = yaw_to_direction(yaw)
-    if agent_direction in direction:
-        current_direction = agent_direction
+    if block_type == "iron_door" and distance < 3.0:
+        print(f"\nFound an iron door at distance {distance}")
 
-    # 2. Check for ledge (air in front and below)
-    # The following logic assumes the agent is always facing "forward" in the grid
-    front_below_block = observation["blocks"][(2 * 25) + (center_idx + (1 * size))] # y=-1, one blocks ahead
-    front_below_block_two = observation["blocks"][(2 * 25) + (center_idx + (2 * size))] # y=-1, two blocks ahead
-    front_below_stair = observation["blocks"][(1 * 25) + (center_idx + (1 * size))] # y=-2, one blocks ahead
-
-    # Calculate coordinates for each block
-    front_below_x = math.floor(observation["XPos"]) - center_block_offset[center_idx + (1 * size)][0]
-    front_below_y = math.floor(observation["YPos"]) - 1
-    front_below_z = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (1 * size)][1]
-
-    front_below_two_x = math.floor(observation["XPos"]) - center_block_offset[center_idx + (2 * size)][0]
-    front_below_two_y = math.floor(observation["YPos"]) - 1
-    front_below_two_z = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (2 * size)][1]
-
-    front_below_stair_x = math.floor(observation["XPos"]) - center_block_offset[center_idx + (1 * size)][0]
-    front_below_stair_y = math.floor(observation["YPos"]) - 2
-    front_below_stair_z = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (1 * size)][1]
-
-    print("\nBlock Information:")
-    print(f"front_below_block: ({front_below_x}, {front_below_y}, {front_below_z}) - Type: {front_below_block}")
-    print(f"front_below_block_two: ({front_below_two_x}, {front_below_two_y}, {front_below_two_z}) - Type: {front_below_block_two}")
-    print(f"front_below_stair: ({front_below_stair_x}, {front_below_stair_y}, {front_below_stair_z}) - Type: {front_below_stair}\n")
-
-    if front_below_block_two == "stone_stairs" or front_below_block == "stone_stairs" or  front_below_stair == "stone_stairs":
-        first_check = True;
-        print("first_check is true in the checking for stairs check\n")
-
-    if front_below_block_two == "air" and front_below_block == "air" and  front_below_stair == "air" and first_check == True:
-        print("first_check is true in the first check\n")
-        print("Danger! Air detected ahead at front_below_block_two, front_below_block and front_below_stair. Stopping!")
+        agent_host.sendCommand("move 0")
         log_block_observations(visited_block_coord, to_be_visited, observation)
-        # Calculate and remove the front block coordinate from to_be_visited
-        front_xpos = math.floor(observation["XPos"]) - center_block_offset[center_idx + (2 * size)][0]
-        front_ypos = math.floor(observation["YPos"])
-        front_zpos = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (2 * size)][1]
-        front_block_coord = (front_xpos, front_ypos, front_zpos)
-        if front_block_coord in to_be_visited:
-            to_be_visited.remove(front_block_coord)
-            print(f"Removed front_block_coord:{front_block_coord} from to_be_visited")
-        agent_host.sendCommand("move 0")  # Stop movement
-        first_check = True;
-        return current_direction, True
-    
-    if front_below_block_two == "air" and first_check == False:
-        print("first_check is false in the second check\n")
-        print("Danger! Air detected ahead at front_below_block_two. Stopping!")
-        log_block_observations(visited_block_coord, to_be_visited, observation)
-        # Calculate and remove the front block coordinate from to_be_visited
-        front_xpos = math.floor(observation["XPos"]) - center_block_offset[center_idx + (2 * size)][0]
-        front_ypos = math.floor(observation["YPos"])
-        front_zpos = math.floor(observation["ZPos"]) - center_block_offset[center_idx + (2 * size)][1]
-        front_block_coord = (front_xpos, front_ypos, front_zpos)
-        if front_block_coord in to_be_visited:
-            to_be_visited.remove(front_block_coord)
-            print(f"Removed front_block_coord:{front_block_coord} from to_be_visited")
-        agent_host.sendCommand("move 0")  # Stop movement
-        return current_direction, True
-
-    return current_direction, False
+        
+        # Check for button near the door
+        if "blocks" in observation:
+            button_pos = find_button_near_door(observation["blocks"], 5)  # 5 is the grid size
+            if button_pos:
+                print(f"Found button at relative position {button_pos}")
+                x, y, z = button_pos
+                print(f"x: {x}, y: {y}, z: {z}")
+                
+                # Determine turn direction based on button position
+                # Button is at (-40, 16, 21) relative to agent at (-41, 15, 20)
+                # So button is actually to the right (+x direction)
+                curr_turn = 0
+                if x > 0:  # Button is to the right
+                    curr_turn = 1
+                elif x < 0:  # Button is to the left  
+                    curr_turn = -1
+                
+                if curr_turn != 0:
+                    agent_host.sendCommand("turn {}".format(curr_turn))
+                    time.sleep(0.5)
+                
+                # Press the button
+                agent_host.sendCommand("use 1")
+                time.sleep(0.5)
+                agent_host.sendCommand("use 0")
+                time.sleep(0.5)
+                
+                # Turn back to original direction
+                if curr_turn != 0:
+                    agent_host.sendCommand("turn {}".format(-curr_turn))
+                    time.sleep(0.5)
+                    agent_host.sendCommand("turn 0")
+                return True
+            else:
+                print("No button found near the iron door")
+                return False
+                
+    elif block_type == "wooden_door" and distance < 2.0:
+        print(f"\nFound a wooden door at distance {distance}")
+        # Try to open the door
+        agent_host.sendCommand("use 1")
+        time.sleep(0.5)
+        agent_host.sendCommand("use 0")
+        time.sleep(0.5)
+        return True
+        
+    return False
 
 def algorithm(agent_host: AgentHost) -> None:
-    """
-    Main pathfinding algorithm implementation.
-    
-    Parameters:
-        agent_host (AgentHost): Malmo agent host instance for controlling the agent
-        
-    Returns:
-        None
-        
-    This function implements the core pathfinding logic:
-    - Tracks visited and safe blocks
-    - Evaluates surrounding blocks for navigation
-    - Controls agent movement
-    - Handles environment observations and safety checks
-    """
-    # Initialize sets to track different types of blocks
-    visited_block_coord = set()                                                                                     # Tracks coordinates that have been visited
-    to_be_visited = set()                                                                                           # Tracks coordinates queued for exploration
+    visited_block_coord = set()
+    to_be_visited = set()
 
-    # Configure the observation grid
-    size = 5                                                                                                        # Size of the observation grid (5x5)
-    center_idx = size ** 2 // 2                                                                                     # Calculate center index of the grid
-    center_x, center_z = center_idx % size, center_idx // size                                                      # Calculate center coordinates
-    
-    center_block_offset = [((i % size) - center_x, center_z - (i // size)) for i in range(size**2)]                 # Create list of offsets for each position in the grid relative to center
- 
-    # Initialize movement direction configuration
-    direction = ["N", "S", "W", "E"]                                                                     # Possible movement directions
-    current_direction = direction[1]                                                                                # Start with downward movement
+    block_visit = [None]
+    is_in_backtrack = False
 
-    # Record the time when the agent starts
-    start_time = time.time()
+    size = 5
+    center_idx = size ** 2 // 2
+    center_x, center_z = center_idx % size, center_idx // size
+    center_block_offset = [((i % size) - center_x, center_z - (i // size)) for i in range(size**2)]
 
-    # Main algorithm loop
+    direction = {"N": 0, "E": 1, "S": 2, "W": 3}
+    current_direction = direction["S"]
+
+    turn_map = {
+        2: {1: 1, -1: -1},  # S
+        0: {-1: 1, 1: -1},  # N
+        3: {1: 1, -1: -1},  # W
+        1: {-1: 1, 1: -1},  # E
+    }
+
     while True:
         world_state = agent_host.getWorldState()
-        if world_state.is_mission_running and world_state.number_of_observations_since_last_state > 0:
-            observation = json.loads(world_state.observations[-1].text)
-            
-            if "blocks" not in observation:                                                                          # Check for grid activation. Will not proceed gameloop if not found
-                print("Failed to retrieve information regarding block surroundings!")
-                break
-
-            if "XPos" not in observation or "YPos" not in observation or "ZPos" not in observation:                  # Check for full stats activation. Will not proceed gameloop if not found
-                print("It seems like FullStat is not activated!")
-                break
-
-            # Process each block position in the 5x5 observation grid around the agent
-            # Parameters: observation - Dictionary containing agent's current observations
-            #            i - Current grid position index being processed
-            #            size - Size of the observation grid (5x5)
-            # Returns: None
-            # Purpose: Processes each block in the observation grid to track visited blocks and identify blocks to visit.
-            #          Handles edge detection and updates exploration queues.
-            for i in range(size ** 2):                                                                              # Iterate through each position in the grid
-                r_edge, c_edge = divmod(i, size)                                                                    # Calculate row and column indices for current position
-                is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1            # Check if current position is on grid edge
-
-                y_elevation_offset = get_y_elevation_offset(observation, i, size)                                    # Get vertical offset for current block position
-                if y_elevation_offset is None:                                                                       # Skip processing if no valid elevation found
-                    continue
-
-                curr_xpos = math.floor(observation["XPos"]) - center_block_offset[i][0]                             # Calculate absolute x coordinate of current block
-                curr_ypos = math.floor(observation["YPos"] + y_elevation_offset - 1)                                # Calculate absolute y coordinate of current block
-                curr_zpos = math.floor(observation["ZPos"]) - center_block_offset[i][1]                             # Calculate absolute z coordinate of current block
-                curr_block_coord = (curr_xpos, curr_ypos, curr_zpos)                                               # Create tuple of block coordinates
-
-                try:
-                    if not is_around_edge:                                                                          # Handle non-edge blocks differently
-                        if curr_block_coord not in visited_block_coord:                                             # Check if block hasn't been visited
-                            visited_block_coord.add(curr_block_coord)                                               # Add block to visited set
-                            if curr_block_coord in to_be_visited:                                                   # Remove from to-visit if present
-                                to_be_visited.remove(curr_block_coord)
-                                print(f"Removed curr_block_coord:{curr_block_coord} from to_be_visited")
-                        continue
-
-                    if curr_block_coord not in visited_block_coord and curr_block_coord not in to_be_visited:       # For edge blocks, check if unvisited and not queued
-                        to_be_visited.add(curr_block_coord)                                                         # Add edge block to exploration queue
-                except IndexError:                                                                                  # Handle index out of bounds errors
-                    print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 4)!")
-                    return
-                    
-
-            # Only print/log after 1 second has passed since agent started
-            if time.time() - start_time >= 1.0:
-                log_block_observations(visited_block_coord, to_be_visited, observation)
-
-            if len(to_be_visited) <= 0:                                                                             # Check if exploration is complete
-                print("No more blocks to explore to! Exiting loop...")                                             # Print completion message
-                agent_host.sendCommand("move 0")                                                                    # Stop agent movement
-                break
-
-            # Move agent forward
-            current_direction, has_ledge = if_ledge(
-                agent_host,
-                current_direction,
-                direction,
-                observation,
-                center_idx,
-                center_block_offset,
-                to_be_visited,
-                visited_block_coord,
-                size
-            )
-
-            # If ledge detected, stop the algorithm completely
-            if has_ledge:
-                print("Ledge detected. Stopping algorithm completely.")
-                break
-
-            # Move agent forward
-            agent_host.sendCommand("move 1")  # Send move command
-            time.sleep(1 / 4.317)  # Wait for movement to complete
-
-        # Exit if mission is not running
         if not world_state.is_mission_running:
             break
 
+        if world_state.number_of_observations_since_last_state > 0:
+            observation = json.loads(world_state.observations[-1].text)
+            
+            # Check for grid activation. Will not proceed gameloop if not found.
+            if "blocks" not in observation:
+                print("Failed to retrieve information regarding block surroundings!")
+                break
+
+            # Check for full stats activation. Will not proceed gameloop if not found.
+            if "XPos" not in observation or "YPos" not in observation or "ZPos" not in observation:
+                print("It seems like FullStat is not activated!")
+                break
+
+            if is_agent_in_stairs(observation["blocks"]):
+                continue
+
+            # Handle door interaction if present
+            if handle_door(agent_host, observation, visited_block_coord, to_be_visited):
+                continue
+
+            # To prevent blocks stacking the same coords, this check will prevent duplicate tuple values.
+            if (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
+                                    math.floor(observation["ZPos"])) == block_visit[-1]:
+                continue
+
+            auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
+            if is_in_backtrack:
+                curr_block = block_visit.pop()
+                is_forward_cleared = check_clearance(curr_block, current_direction % 4, to_be_visited)
+                if is_forward_cleared:
+                    is_in_backtrack = False
+                    continue
+                is_left_cleared = check_clearance(curr_block, (current_direction - 1) % 4, to_be_visited)
+                is_right_cleared = check_clearance(curr_block, (current_direction + 1) % 4, to_be_visited)
+                curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
+
+                if curr_turn != 0:
+                    # Adjust agent to the center block as it doesn't stop immediately.
+                    agent_host.sendCommand("move 0")
+                    time.sleep(0.2)
+                    agent_host.sendCommand(
+                        "tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1, curr_block[2] + 0.5))
+                    current_direction = (current_direction + curr_turn) % 4
+                    agent_host.sendCommand("turn {}".format(curr_turn))
+                    time.sleep(1)
+                    agent_host.sendCommand("turn 0")
+                    # auto_correct_yaw(agent_host, current_direction)
+                    is_in_backtrack = False
+                    continue
+
+                if len(block_visit) == 0:
+                    print("DEBUG: This agent is now all the way back to the beginning!")
+                    is_in_backtrack = False
+                    break
+
+                prev_block = block_visit[-1]
+                x_diff = curr_block[0] - prev_block[0]
+                z_diff = curr_block[2] - prev_block[2]
+                if current_direction in [0, 2]:
+                    diff = x_diff
+                elif current_direction in [1, 3]:
+                    diff = z_diff
+                else:
+                    print("ERROR: Unknown direction ID")
+                    diff = 0
+
+                if diff in turn_map[current_direction]:
+                    turn = turn_map[current_direction][diff]
+                    agent_host.sendCommand("move 0")
+                    time.sleep(0.2)
+                    agent_host.sendCommand("tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1,
+                                                                curr_block[2] + 0.5))
+                    agent_host.sendCommand("turn {}".format(turn))
+                    time.sleep(1)
+                    agent_host.sendCommand("turn 0")
+                    current_direction = (current_direction + turn) % 4
+            else:
+                block_visit.append((math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
+                                    math.floor(observation["ZPos"])))
+                # agent_host.sendCommand(f"chat /setblock {block_visit[-1][0]} {block_visit[-1][1]} {block_visit[-1][2]} minecraft:gold_block")
+                for i in range(size ** 2):
+                    r_edge, c_edge = divmod(i, size)
+                    is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1       # For stack
+
+                    y_elevation_offset = get_y_elevation_offset(observation["blocks"], i, size)
+                    if y_elevation_offset is None:
+                        continue
+
+                    curr_xpos = math.floor(observation["XPos"]) + center_block_offset[i][0]
+                    curr_ypos = math.floor(observation["YPos"] + y_elevation_offset - 1)
+                    curr_zpos = math.floor(observation["ZPos"]) - center_block_offset[i][1]
+                    curr_block_coord = (curr_xpos, curr_ypos, curr_zpos)
+                    try:
+                        if not is_around_edge:
+                            if curr_block_coord not in visited_block_coord:
+                                visited_block_coord.add(curr_block_coord)
+                                # agent_host.sendCommand(
+                                #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:emerald_block")
+                                if curr_block_coord in to_be_visited:
+                                    to_be_visited.remove(curr_block_coord)
+                            continue
+
+                        if curr_block_coord not in visited_block_coord and curr_block_coord not in to_be_visited:
+                            to_be_visited.add(curr_block_coord)
+                            # agent_host.sendCommand(
+                            #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:glowstone")
+                    except IndexError:
+                        print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 6)!")
+                        return
+
+                # assert len(to_be_visited) == 3
+                if len(to_be_visited) <= 0:
+                    print("No more blocks to explore to! Exiting loop...")
+                    agent_host.sendCommand("move 0")
+                    break
+
+                is_forward_cleared = check_clearance(block_visit[-1], current_direction % 4, to_be_visited)
+                if not is_forward_cleared:
+                    is_left_cleared = check_clearance(block_visit[-1], (current_direction - 1) % 4, to_be_visited)
+                    is_right_cleared = check_clearance(block_visit[-1], (current_direction + 1) % 4, to_be_visited)
+                    curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
+
+                    # Adjust agent to the center block as it doesn't stop immediately.
+                    agent_host.sendCommand("move 0")
+                    time.sleep(0.2)
+                    agent_host.sendCommand("tp {} {} {}".format(block_visit[-1][0] + 0.5, block_visit[-1][1] + 1, block_visit[-1][2] + 0.5))
+
+                    if curr_turn != 0:
+                        current_direction = (current_direction + curr_turn) % 4
+                        agent_host.sendCommand("turn {}".format(curr_turn))
+                        time.sleep(1)
+                    else:
+                        is_in_backtrack = True
+                        current_direction = (current_direction + 2) % 4
+                        agent_host.sendCommand("turn -1")
+                        time.sleep(2)
+                    agent_host.sendCommand("turn 0")
+                    # auto_correct_yaw(agent_host, current_direction)
+
+            print("\nVisited Blocks:", list(visited_block_coord))
+            print("To Be Visited:", list(to_be_visited))
+            print("Current Direction: ", current_direction)
+            print("------------------------------------------------------------------")
+            agent_host.sendCommand("move 1")
+
+
+
 def main():
-    """
-    Main function to initialize and run the Malmo mission.
-    
-    Parameters:
-        None
-        
-    Returns:
-        None
-        
-    This function handles:
-    - Mission initialization and setup
-    - Error handling and retry logic
-    - Mission execution and monitoring
-    - Cleanup and termination
-    """
-    # Initialize the Malmo agent host
     agent_host = MalmoPython.AgentHost()
     try:
-        agent_host.parse(sys.argv)  # Parse command line arguments
+        agent_host.parse(sys.argv)
     except RuntimeError as e:
         print('ERROR:', e)
         print(agent_host.getUsage())
         exit(1)
-    if agent_host.receivedArgument("help"):  # Check for help argument
+    if agent_host.receivedArgument("help"):
         print(agent_host.getUsage())
         exit(0)
 
-    # Create mission specification and record
     my_mission = MalmoPython.MissionSpec(run_xml_mission(), True)
     my_mission_record = MalmoPython.MissionRecordSpec()
 
-    # Attempt to start a mission with retry logic
-    max_retries = 3  # Maximum number of retry attempts
+    # Attempt to start a mission:
+    max_retries = 3
     for retry in range(max_retries):
         try:
-            agent_host.startMission(my_mission, my_mission_record)  # Start the mission
+            agent_host.startMission(my_mission, my_mission_record)
             break
         except RuntimeError as e:
-            if retry == max_retries - 1:  # If last retry attempt
+            if retry == max_retries - 1:
                 print("Error starting mission:", e)
                 exit(1)
             else:
-                time.sleep(2)  # Wait before retrying
+                time.sleep(2)
 
-    # Loop until mission starts
+    # Loop until mission starts:
     print("Waiting for the mission to start ", end=' ')
     world_state = agent_host.getWorldState()
-    while not world_state.has_mission_begun:  # Wait until mission starts
+    while not world_state.has_mission_begun:
         print(".", end="")
         time.sleep(0.1)
         world_state = agent_host.getWorldState()
-        for error in world_state.errors:  # Print any errors
+        for error in world_state.errors:
             print("Error:", error.text)
 
     print()
     print("Mission running ", end=' ')
 
-    # Run the pathfinding algorithm
+    # ADD SOMETHING HERE...
     algorithm(agent_host)
 
-    # Loop until mission ends
-    while world_state.is_mission_running:  # Continue until mission ends
+    # Loop until mission ends:
+    while world_state.is_mission_running:
         print(".", end="")
         time.sleep(0.1)
         world_state = agent_host.getWorldState()
-        for error in world_state.errors:  # Print any errors
+        for error in world_state.errors:
             print("Error:", error.text)
 
     print()
-    print("Mission ended")  # Mission completion message
+    print("Mission ended")
+    # Mission has ended.
 
-# Entry point of the script
 if __name__ == "__main__":
-    main()  # Run the main function
+    main()
