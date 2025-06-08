@@ -6,11 +6,14 @@ import random
 import re
 import sys
 import time
+import pickle
+import os
+import random
 
 from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
-INSERT_STRING_HERE =  "Iron Door Open"
+INSERT_STRING_HERE =  "Reinforcement Learning Equipment"
 
 OPTIONS = {
     "Block Surround": (0, 14, -9),
@@ -27,9 +30,29 @@ OPTIONS = {
     "Slabbed Hidden Path": (-56, 14, 0),
     "Five-way Crossing": (-60, 14, 21),
     "Fountain": (-59, 14, 45),
-    "Portal Room Detection": (-65, 14, 0)
+    "Portal Room Detection": (-65, 14, 0),
+    "Reinforcement Learning Equipment": (-41, 14, -31)
 }
 
+# === Reinforcement Learning Setup ===
+ACTIONS = ["diamond_sword", "diamond_axe", "bow", "stone_sword", "stone_axe", "eat_food"]
+HOTBAR_SLOTS = {
+    "diamond_sword": 0,
+    "diamond_axe": 1,
+    "bow": 2,
+    "stone_sword": 3,
+    "stone_axe": 4,
+    "eat_food": 7
+}
+
+Q_SAVE_PATH = "q_learning_combat.pkl"
+q_table = {}
+last_state = None
+last_action = None
+
+if os.path.exists(Q_SAVE_PATH):
+    with open(Q_SAVE_PATH, "rb") as f:
+        q_table = pickle.load(f)
 
 def run_xml_mission():
     return '''<?xml version="1.0" encoding="UTF-8" ?>
@@ -44,27 +67,44 @@ def run_xml_mission():
                     <StartTime>1000</StartTime>
                     <AllowPassageOfTime>false</AllowPassageOfTime>
                 </Time>
-                <Weather>clear</Weather>
+                    <AllowSpawning>true</AllowSpawning>
+                <AllowedMobs>Zombie</AllowedMobs>
+                <Weather>rain</Weather>
             </ServerInitialConditions> 
             <ServerHandlers>
                 <FileWorldGenerator src="C:\\Malmo-0.37.0-Windows-64bit_withBoost_Python3.7\\Minecraft\\run\\saves\\Algorithm World Test"/>
                 <ServerQuitFromTimeUp timeLimitMs="40000"/>
                 <ServerQuitWhenAnyAgentFinishes/>
+
             </ServerHandlers>
         </ServerSection>
         
-        <AgentSection mode="Creative">
+        <AgentSection mode="Survival">
             <Name>Golly</Name>
             <AgentStart>
                 <Placement x="''' + str(OPTIONS[INSERT_STRING_HERE][0] + 0.5) + '''" y="''' + str(OPTIONS[INSERT_STRING_HERE][1] + 1) + '''" z="''' + str(OPTIONS[INSERT_STRING_HERE][2] + 0.5) + '''"/>
                 <Inventory>
-                    <InventoryItem slot="0" type="diamond_pickaxe"/>
+                    <InventoryItem slot="0" type="diamond_sword"/>
+                    <InventoryItem slot="1" type="diamond_axe"/>
+                    <InventoryItem slot="2" type="bow"/>
+                    <InventoryItem slot="3" type="stone_sword"/>
+                    <InventoryItem slot="4" type="stone_axe"/>
+                    <InventoryItem slot="5" type="dirt" quantity="1"/>
+                    <InventoryItem slot="6" type="arrow" quantity="30"/>
+                    <InventoryItem slot="7" type="cooked_beef" quantity="10"/>
                 </Inventory>
             </AgentStart>
             <AgentHandlers>
                 <ObservationFromFullStats/>
                 <ObservationFromChat/>
                 <ObservationFromRay/>
+                <ObservationFromHotBar/>
+                <RewardForDamagingEntity>
+                    <Mob type="Zombie" reward="10"/>
+                </RewardForDamagingEntity>
+                <ObservationFromNearbyEntities>
+                    <Range name="entities" xrange="10" yrange="2" zrange="10" />
+                </ObservationFromNearbyEntities>
                 <ObservationFromGrid>
                     <Grid name="blocks">
                         <min x="-2" y="-3" z="-2"/>
@@ -73,6 +113,7 @@ def run_xml_mission():
                 </ObservationFromGrid>
                 <AbsoluteMovementCommands/>
                 <ContinuousMovementCommands turnSpeedDegs="90"/>
+                <InventoryCommands/>
                 <ChatCommands/>
                 <MissionQuitCommands/>
                 <AgentQuitFromTouchingBlockType>
@@ -82,9 +123,10 @@ def run_xml_mission():
         </AgentSection>
     </Mission>'''
 
+
 def log_block_observations(visited_block_coord, to_be_visited, observation):
     """
-    Continuously logs the visited blocks and blocks to visit to a file.
+    Continuously logs the visited blocks and blocks to visit to agent file.
     Parameters:
         visited_block_coord (set): Set of visited block coordinates (x, y, z)
         to_be_visited (set): Set of block coordinates queued for exploration
@@ -371,7 +413,152 @@ def handle_door(agent_host: AgentHost, observation: dict, visited_block_coord: s
         
     return False
 
+def get_state(observation):
+    health = int(observation.get("Life", 20))
+    food = int(observation.get("Food", 20))
+    equipped = observation.get("HotbarSlot", 0)
+    nearby_zombie = any(e["name"] == "Zombie" for e in observation.get("entities", []))
+    return (health, food, equipped, nearby_zombie)
+
+def choose_action(state):
+    global q_table
+    epsilon = 0.2  # More exploration
+    if state not in q_table:
+        q_table[state] = {action: 0.0 for action in ACTIONS}
+        print(f"[INIT] Initialized new state in Q-table: {state}")
+
+    if random.uniform(0, 1) < epsilon:
+        chosen_action = random.choice(ACTIONS)
+        print(f"[EXPLORE] Randomly chosen action: {chosen_action} for state {state}")
+    else:
+        max_q = max(q_table[state].values())
+        best_actions = [a for a, q in q_table[state].items() if q == max_q]
+        chosen_action = random.choice(best_actions)
+        print(f"[EXPLOIT] Best action(s): {best_actions} → Chosen: {chosen_action} for state {state}")
+    
+    return chosen_action
+
+def update_q_table(state, action, reward, next_state):
+    global q_table
+    learning_rate = 0.1
+    discount_factor = 0.9
+
+    if state not in q_table:
+        q_table[state] = {a: 0.0 for a in ACTIONS}
+        print(f"[INIT] Initialized state {state} in Q-table.")
+
+    if next_state not in q_table:
+        q_table[next_state] = {a: 0.0 for a in ACTIONS}
+        print(f"[INIT] Initialized next state {next_state} in Q-table.")
+
+    old_q = q_table[state][action]
+    next_max = max(q_table[next_state].values())
+    new_q = old_q + learning_rate * (reward + discount_factor * next_max - old_q)
+
+    q_table[state][action] = new_q
+
+    print(f"[UPDATE] {state} --[{action}/{reward}]→ {next_state}, Q: {old_q:.2f} → {new_q:.2f}")
+
+def combat_behavior(agent_host, observation, current_yaw):
+
+    
+
+    if "entities" not in observation or not observation["entities"]:
+        print("No entities detected in combat_behavior.")
+        return
+
+    entities = observation["entities"]
+    self_x = observation.get("XPos", 0)
+    self_z = observation.get("ZPos", 0)
+
+    nearest_mob = None
+    min_dist = float("inf")
+
+    for entity in entities:
+        if entity["name"] == "Zombie":
+            dist = (entity["x"] - self_x) ** 2 + (entity["z"] - self_z) ** 2
+            if dist < min_dist:
+                min_dist = dist
+                nearest_mob = entity
+
+    if nearest_mob:
+        dx = nearest_mob["x"] - self_x
+        dz = nearest_mob["z"] - self_z
+
+        target_yaw = -math.degrees(math.atan2(dx, dz))
+        turn_amount = (target_yaw - current_yaw + 360) % 360
+        if turn_amount > 180:
+            turn_amount -= 360
+        turn_rate = (turn_amount / 180.0) * 2.0  # Multiply by 2.0 to make turn faster
+
+        agent_host.sendCommand(f"turn {turn_rate:.2f}")
+
+        distance = math.sqrt(min_dist)
+
+        if distance > 3:
+            agent_host.sendCommand("move 1")
+        else:
+            agent_host.sendCommand("move 0")
+
+            # Choose and execute Q-learned action
+            state = get_state(observation)
+            chosen_action = choose_action(state)
+
+            if chosen_action != "eat_food":
+                print(f"Equipping {chosen_action} from hotbar slot {HOTBAR_SLOTS[chosen_action]}")
+                # print(f"Sending command to equip {chosen_action}")
+                if chosen_action == "diamond_sword":
+                    print("Sending command to equip diamond sword")
+                    agent_host.sendCommand("hotbar.1 1") 
+                    agent_host.sendCommand("hotbar.1 0")
+                elif chosen_action == "diamond_axe":
+                    print("Sending command to equip diamond axe")
+                    agent_host.sendCommand("hotbar.2 1")
+                    agent_host.sendCommand("hotbar.2 0")
+                elif chosen_action == "bow":
+                    print("Sending command to equip bow")
+                    agent_host.sendCommand("hotbar.3 1")
+                    agent_host.sendCommand("hotbar.3 0")
+                elif chosen_action == "stone_sword":
+                    print("Sending command to equip stone sword")
+                    agent_host.sendCommand("hotbar.4 1")
+                    agent_host.sendCommand("hotbar.4 0")
+                elif chosen_action == "stone_axe":
+                    print("Sending command to equip stone axe")
+                    agent_host.sendCommand("hotbar.5 1")
+                    agent_host.sendCommand("hotbar.5 0")
+                time.sleep(0.2)
+
+            if chosen_action in {"diamond_sword", "diamond_axe", "stone_sword", "stone_axe"}:
+                # print(f"Equipping {chosen_action} from hotbar slot {HOTBAR_SLOTS[chosen_action]+1}")
+                agent_host.sendCommand("attack 1")
+                time.sleep(0.2)
+                agent_host.sendCommand("attack 0")
+            elif chosen_action == "bow":
+                agent_host.sendCommand("use 1")
+                time.sleep(0.5)
+                agent_host.sendCommand("use 0")
+            elif chosen_action == "eat_food":
+                agent_host.sendCommand("hotbar.8 1")
+                agent_host.sendCommand("use 1")
+                time.sleep(1.2)
+                agent_host.sendCommand("use 0")
+            print("Action taken:", chosen_action)
+           
+
+            last_state = state
+            last_action = chosen_action
+
+            return chosen_action
+
 def algorithm(agent_host: AgentHost) -> None:
+
+    global last_state, last_action
+
+    current_state = "PATHFINDING"
+    pre_combat_position = None
+    pre_combat_yaw = None
+
     visited_block_coord = set()
     to_be_visited = set()
 
@@ -400,149 +587,251 @@ def algorithm(agent_host: AgentHost) -> None:
 
         if world_state.number_of_observations_since_last_state > 0:
             observation = json.loads(world_state.observations[-1].text)
+                   
+            # ✅ MOB CHECK START
+            if "entities" in observation and any(e["name"].lower() == "zombie" for e in observation["entities"]):
+                print("Combat entity detected! Switching to combat mode...")
+                # print("Detected entities:", observation["entities"])
+                if current_state == "PATHFINDING":
+                    print("FIGHTING STATE ACTIVE")
+                    current_state = "FIGHTING"
+
+                if pre_combat_position is None:
+                    # Save pre-combat position and yaw
+                    if "XPos" in observation and "ZPos" in observation and "Yaw" in observation:
+                        pre_combat_position = (observation["XPos"], observation["ZPos"])
+                        pre_combat_yaw = observation["Yaw"]
+                        print("Pre-combat position:", pre_combat_position)
+                        print("Pre-combat yaw:", pre_combat_yaw)
+
+                if current_state == "FIGHTING":
+                    action = combat_behavior(agent_host, observation, observation.get("Yaw", 0))
+
+                    # ✅ Q-learning Reward Assignment
+                    next_state = get_state(observation)
+                    reward = 0
+
+                    # Reward logic based on observation
+                    if "DamageDealt" in observation and observation["DamageDealt"] > 0:
+                        reward += 2
+                    if "DamageTaken" in observation and observation["DamageTaken"] > 0:
+                        reward -= 3
+                    if "MobsKilled" in observation and observation["MobsKilled"] > 0:
+                        reward += 10
+                    if observation.get("DamageTaken", 0) == 0:
+                        reward += 3  # bonus for flawless fight
+
+                    print("Reward this step:", reward)
+
+                    # Q-learning update
+                    if last_state is not None and last_action is not None:
+                        print("Updating Q-table for:", last_state, "→", last_action, "→", reward)
+                        update_q_table(last_state, last_action, reward, next_state)
+                    else:
+                        print("Skipping Q-update: missing last_state or last_action")
+
+                    # Save current for next step
+                    last_state = next_state
+                    last_action = action
+
+            # ✅ MOB CHECK END
             
-            # Check for grid activation. Will not proceed gameloop if not found.
-            if "blocks" not in observation:
-                print("Failed to retrieve information regarding block surroundings!")
-                break
-
-            # Check for full stats activation. Will not proceed gameloop if not found.
-            if "XPos" not in observation or "YPos" not in observation or "ZPos" not in observation:
-                print("It seems like FullStat is not activated!")
-                break
-
-            if is_agent_in_stairs(observation["blocks"]):
-                continue
-
-            # Handle door interaction if present
-            if handle_door(agent_host, observation, visited_block_coord, to_be_visited):
-                continue
-
-            # To prevent blocks stacking the same coords, this check will prevent duplicate tuple values.
-            if (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
-                                    math.floor(observation["ZPos"])) == block_visit[-1]:
-                continue
-
-            auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
-            if is_in_backtrack:
-                curr_block = block_visit.pop()
-                is_forward_cleared = check_clearance(curr_block, current_direction % 4, to_be_visited)
-                if is_forward_cleared:
-                    is_in_backtrack = False
-                    continue
-                is_left_cleared = check_clearance(curr_block, (current_direction - 1) % 4, to_be_visited)
-                is_right_cleared = check_clearance(curr_block, (current_direction + 1) % 4, to_be_visited)
-                curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
-
-                if curr_turn != 0:
-                    # Adjust agent to the center block as it doesn't stop immediately.
-                    agent_host.sendCommand("move 0")
-                    time.sleep(0.2)
-                    agent_host.sendCommand(
-                        "tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1, curr_block[2] + 0.5))
-                    current_direction = (current_direction + curr_turn) % 4
-                    agent_host.sendCommand("turn {}".format(curr_turn))
-                    time.sleep(1)
-                    agent_host.sendCommand("turn 0")
-                    # auto_correct_yaw(agent_host, current_direction)
-                    is_in_backtrack = False
-                    continue
-
-                if len(block_visit) == 0:
-                    print("DEBUG: This agent is now all the way back to the beginning!")
-                    is_in_backtrack = False
+            elif current_state == "PATHFINDING":
+                # Check for grid activation. Will not proceed gameloop if not found.
+                if "blocks" not in observation:
+                    print("Failed to retrieve information regarding block surroundings!")
                     break
 
-                prev_block = block_visit[-1]
-                x_diff = curr_block[0] - prev_block[0]
-                z_diff = curr_block[2] - prev_block[2]
-                if current_direction in [0, 2]:
-                    diff = x_diff
-                elif current_direction in [1, 3]:
-                    diff = z_diff
-                else:
-                    print("ERROR: Unknown direction ID")
-                    diff = 0
+                # Check for full stats activation. Will not proceed gameloop if not found.
+                if "XPos" not in observation or "YPos" not in observation or "ZPos" not in observation:
+                    print("It seems like FullStat is not activated!")
+                    break
 
-                if diff in turn_map[current_direction]:
-                    turn = turn_map[current_direction][diff]
-                    agent_host.sendCommand("move 0")
-                    time.sleep(0.2)
-                    agent_host.sendCommand("tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1,
-                                                                curr_block[2] + 0.5))
-                    agent_host.sendCommand("turn {}".format(turn))
-                    time.sleep(1)
-                    agent_host.sendCommand("turn 0")
-                    current_direction = (current_direction + turn) % 4
-            else:
-                block_visit.append((math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
-                                    math.floor(observation["ZPos"])))
-                # agent_host.sendCommand(f"chat /setblock {block_visit[-1][0]} {block_visit[-1][1]} {block_visit[-1][2]} minecraft:gold_block")
-                for i in range(size ** 2):
-                    r_edge, c_edge = divmod(i, size)
-                    is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1       # For stack
+                if is_agent_in_stairs(observation["blocks"]):
+                    continue
 
-                    y_elevation_offset = get_y_elevation_offset(observation["blocks"], i, size)
-                    if y_elevation_offset is None:
+                # Handle door interaction if present
+                if handle_door(agent_host, observation, visited_block_coord, to_be_visited):
+                    continue
+
+                # To prevent blocks stacking the same coords, this check will prevent duplicate tuple values.
+                if (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
+                                        math.floor(observation["ZPos"])) == block_visit[-1]:
+                    continue
+
+                auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
+                if is_in_backtrack:
+                    curr_block = block_visit.pop()
+                    is_forward_cleared = check_clearance(curr_block, current_direction % 4, to_be_visited)
+                    if is_forward_cleared:
+                        is_in_backtrack = False
                         continue
-
-                    curr_xpos = math.floor(observation["XPos"]) + center_block_offset[i][0]
-                    curr_ypos = math.floor(observation["YPos"] + y_elevation_offset - 1)
-                    curr_zpos = math.floor(observation["ZPos"]) - center_block_offset[i][1]
-                    curr_block_coord = (curr_xpos, curr_ypos, curr_zpos)
-                    try:
-                        if not is_around_edge:
-                            if curr_block_coord not in visited_block_coord:
-                                visited_block_coord.add(curr_block_coord)
-                                # agent_host.sendCommand(
-                                #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:emerald_block")
-                                if curr_block_coord in to_be_visited:
-                                    to_be_visited.remove(curr_block_coord)
-                            continue
-
-                        if curr_block_coord not in visited_block_coord and curr_block_coord not in to_be_visited:
-                            to_be_visited.add(curr_block_coord)
-                            # agent_host.sendCommand(
-                            #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:glowstone")
-                    except IndexError:
-                        print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 6)!")
-                        return
-
-                # assert len(to_be_visited) == 3
-                if len(to_be_visited) <= 0:
-                    print("No more blocks to explore to! Exiting loop...")
-                    agent_host.sendCommand("move 0")
-                    break
-
-                is_forward_cleared = check_clearance(block_visit[-1], current_direction % 4, to_be_visited)
-                if not is_forward_cleared:
-                    is_left_cleared = check_clearance(block_visit[-1], (current_direction - 1) % 4, to_be_visited)
-                    is_right_cleared = check_clearance(block_visit[-1], (current_direction + 1) % 4, to_be_visited)
+                    is_left_cleared = check_clearance(curr_block, (current_direction - 1) % 4, to_be_visited)
+                    is_right_cleared = check_clearance(curr_block, (current_direction + 1) % 4, to_be_visited)
                     curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
 
-                    # Adjust agent to the center block as it doesn't stop immediately.
-                    agent_host.sendCommand("move 0")
-                    time.sleep(0.2)
-                    agent_host.sendCommand("tp {} {} {}".format(block_visit[-1][0] + 0.5, block_visit[-1][1] + 1, block_visit[-1][2] + 0.5))
-
                     if curr_turn != 0:
+                        # Adjust agent to the center block as it doesn't stop immediately.
+                        agent_host.sendCommand("move 0")
+                        time.sleep(0.2)
+                        agent_host.sendCommand(
+                            "tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1, curr_block[2] + 0.5))
                         current_direction = (current_direction + curr_turn) % 4
                         agent_host.sendCommand("turn {}".format(curr_turn))
                         time.sleep(1)
+                        agent_host.sendCommand("turn 0")
+                        # auto_correct_yaw(agent_host, current_direction)
+                        is_in_backtrack = False
+                        continue
+
+                    if len(block_visit) == 0:
+                        print("DEBUG: This agent is now all the way back to the beginning!")
+                        is_in_backtrack = False
+                        break
+
+                    prev_block = block_visit[-1]
+                    x_diff = curr_block[0] - prev_block[0]
+                    z_diff = curr_block[2] - prev_block[2]
+                    if current_direction in [0, 2]:
+                        diff = x_diff
+                    elif current_direction in [1, 3]:
+                        diff = z_diff
                     else:
-                        is_in_backtrack = True
-                        current_direction = (current_direction + 2) % 4
-                        agent_host.sendCommand("turn -1")
-                        time.sleep(2)
+                        print("ERROR: Unknown direction ID")
+                        diff = 0
+
+                    if diff in turn_map[current_direction]:
+                        turn = turn_map[current_direction][diff]
+                        agent_host.sendCommand("move 0")
+                        time.sleep(0.2)
+                        agent_host.sendCommand("tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1,
+                                                                    curr_block[2] + 0.5))
+                        agent_host.sendCommand("turn {}".format(turn))
+                        time.sleep(1)
+                        agent_host.sendCommand("turn 0")
+                        current_direction = (current_direction + turn) % 4
+                else:
+                    block_visit.append((math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
+                                        math.floor(observation["ZPos"])))
+                    # agent_host.sendCommand(f"chat /setblock {block_visit[-1][0]} {block_visit[-1][1]} {block_visit[-1][2]} minecraft:gold_block")
+                    for i in range(size ** 2):
+                        r_edge, c_edge = divmod(i, size)
+                        is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1       # For stack
+
+                        y_elevation_offset = get_y_elevation_offset(observation["blocks"], i, size)
+                        if y_elevation_offset is None:
+                            continue
+
+                        curr_xpos = math.floor(observation["XPos"]) + center_block_offset[i][0]
+                        curr_ypos = math.floor(observation["YPos"] + y_elevation_offset - 1)
+                        curr_zpos = math.floor(observation["ZPos"]) - center_block_offset[i][1]
+                        curr_block_coord = (curr_xpos, curr_ypos, curr_zpos)
+                        try:
+                            if not is_around_edge:
+                                if curr_block_coord not in visited_block_coord:
+                                    visited_block_coord.add(curr_block_coord)
+                                    # agent_host.sendCommand(
+                                    #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:emerald_block")
+                                    if curr_block_coord in to_be_visited:
+                                        to_be_visited.remove(curr_block_coord)
+                                continue
+
+                            if curr_block_coord not in visited_block_coord and curr_block_coord not in to_be_visited:
+                                to_be_visited.add(curr_block_coord)
+                                # agent_host.sendCommand(
+                                #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:glowstone")
+                        except IndexError:
+                            print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 6)!")
+                            return
+
+                    # assert len(to_be_visited) == 3
+                    if len(to_be_visited) <= 0:
+                        print("No more blocks to explore to! Exiting loop...")
+                        agent_host.sendCommand("move 0")
+                        break
+
+                    is_forward_cleared = check_clearance(block_visit[-1], current_direction % 4, to_be_visited)
+                    if not is_forward_cleared:
+                        is_left_cleared = check_clearance(block_visit[-1], (current_direction - 1) % 4, to_be_visited)
+                        is_right_cleared = check_clearance(block_visit[-1], (current_direction + 1) % 4, to_be_visited)
+                        curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
+
+                        # Adjust agent to the center block as it doesn't stop immediately.
+                        agent_host.sendCommand("move 0")
+                        time.sleep(0.2)
+                        agent_host.sendCommand("tp {} {} {}".format(block_visit[-1][0] + 0.5, block_visit[-1][1] + 1, block_visit[-1][2] + 0.5))
+
+                        if curr_turn != 0:
+                            current_direction = (current_direction + curr_turn) % 4
+                            agent_host.sendCommand("turn {}".format(curr_turn))
+                            time.sleep(1)
+                        else:
+                            is_in_backtrack = True
+                            current_direction = (current_direction + 2) % 4
+                            agent_host.sendCommand("turn -1")
+                            time.sleep(2)
+                        agent_host.sendCommand("turn 0")
+                        # auto_correct_yaw(agent_host, current_direction)
+
+                    # print("\nVisited Blocks:", list(visited_block_coord))
+                    # print("To Be Visited:", list(to_be_visited))
+                    # print("Current Direction: ", current_direction)
+                    # print("------------------------------------------------------------------")
+                    agent_host.sendCommand("move 1")
+                    # print("Attempting to switch to stone sword...")
+                    # # Try alternative approach using swapInventoryItems
+                    # current_slot = observation.get("HotbarSlot", 0)
+                    # agent_host.sendCommand(f"swapInventoryItems {current_slot} 3")  # Move stone sword to current slot
+                    # time.sleep(0.1)
+                    # print("Inventory swap command sent")
+                    
+                    # # Add debug print for observation
+                    # if "HotbarSlot" in observation:
+                    #     print(f"Current hotbar slot: {observation['HotbarSlot']}")
+            
+            elif current_state == "FIGHTING" and (len(observation["entities"]) <= 1 or not any(e["name"].lower() == "zombie" for e in observation["entities"])):
+                print("Combat over. Returning to pathfinding...")
+
+                # Restore pre-combat position
+                if pre_combat_position:
+                    x, z = pre_combat_position
+                    agent_host.sendCommand("move 0")
+                    time.sleep(0.2)
+                    # Get current y position since ~ doesn't work
+                    y = observation.get("YPos", 0)
+                    agent_host.sendCommand(f"tp {x + 0.5} {y} {z + 0.5}")
+                    time.sleep(0.2)
+
+                # Restore yaw
+                if pre_combat_yaw is not None:
+                    # print("Restoring yaw")
+                    # print("Pre-combat position:", pre_combat_position)
+                    # print("Pre-combat yaw:", pre_combat_yaw)
+                    current_yaw = observation.get("Yaw", 0)
+                    # print("Current yaw:", current_yaw)
+                    yaw_diff = (pre_combat_yaw - current_yaw + 360) % 360
+                    # print("Yaw difference:", yaw_diff)
+                    if yaw_diff > 180:
+                        yaw_diff -= 360
+                    turn_rate = yaw_diff / 90
+                    agent_host.sendCommand(f"turn {turn_rate:.2f}")
+                    time.sleep(abs(turn_rate) * 1)  # Scale sleep with amount turned
                     agent_host.sendCommand("turn 0")
-                    # auto_correct_yaw(agent_host, current_direction)
 
-            print("\nVisited Blocks:", list(visited_block_coord))
-            print("To Be Visited:", list(to_be_visited))
-            print("Current Direction: ", current_direction)
-            print("------------------------------------------------------------------")
-            agent_host.sendCommand("move 1")
+                # Reset state
+                last_state = None
+                last_action = None
+                pre_combat_position = None
+                pre_combat_yaw = None
+                current_state = "PATHFINDING"
+                print("Returned to PATHFINDING state.")    
+            # print("Last line of algorithm")
+            # print("Detected entities:", observation["entities"])
+            # print("Current state:", current_state)
 
+def save_q_table():
+    with open("q_learning_rewards.pkl", "wb") as f:
+        pickle.dump(q_table, f)
 
 
 def main():
@@ -587,7 +876,10 @@ def main():
     print("Mission running ", end=' ')
 
     # ADD SOMETHING HERE...
+    agent_host.sendCommand("hotbar.3 1")
+    agent_host.sendCommand("hotbar.3 0")
     algorithm(agent_host)
+
 
     # Loop until mission ends:
     while world_state.is_mission_running:
@@ -600,6 +892,16 @@ def main():
     print()
     print("Mission ended")
     # Mission has ended.
+    # === Save Q-table after mission ends ===
+    with open(Q_SAVE_PATH, "wb") as f:
+        pickle.dump(q_table, f)
+    print("Q-table saved.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user. Saving Q-table...")
+        save_q_table()
+        print("Q-table saved successfully. Exiting.")
+        sys.exit(0)
