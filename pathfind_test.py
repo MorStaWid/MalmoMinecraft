@@ -664,8 +664,9 @@ def algorithm(agent_host: AgentHost) -> None:
                     continue
 
                 # To prevent blocks stacking the same coords, this check will prevent duplicate tuple values.
-                if (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
-                                        math.floor(observation["ZPos"])) == block_visit[-1]:
+                standing_block = (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
+                                        math.floor(observation["ZPos"]))
+                if (not is_in_backtrack and standing_block == block_visit[-1]) or (is_in_backtrack and standing_block != block_visit[-1]):
                     continue
 
                 auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
@@ -720,8 +721,7 @@ def algorithm(agent_host: AgentHost) -> None:
                         agent_host.sendCommand("turn 0")
                         current_direction = (current_direction + turn) % 4
                 else:
-                    block_visit.append((math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
-                                        math.floor(observation["ZPos"])))
+                    block_visit.append(standing_block)
                     # agent_host.sendCommand(f"chat /setblock {block_visit[-1][0]} {block_visit[-1][1]} {block_visit[-1][2]} minecraft:gold_block")
                     for i in range(size ** 2):
                         r_edge, c_edge = divmod(i, size)
@@ -782,11 +782,11 @@ def algorithm(agent_host: AgentHost) -> None:
                         agent_host.sendCommand("turn 0")
                         # auto_correct_yaw(agent_host, current_direction)
 
-                    print("\nVisited Blocks:", list(visited_block_coord))
-                    print("To Be Visited:", list(to_be_visited))
-                    print("Current Direction: ", current_direction)
-                    print("------------------------------------------------------------------")
-                    agent_host.sendCommand("move 1")
+                print("\nVisited Blocks:", list(visited_block_coord))
+                print("To Be Visited:", list(to_be_visited))
+                print("Current Direction: ", current_direction)
+                print("------------------------------------------------------------------")
+                agent_host.sendCommand("move 1")
             
             elif current_state == "FIGHTING" and (len(observation["entities"]) <= 1 or not any(e["name"].lower() == "zombie" for e in observation["entities"])):
                 print("Combat over. Returning to pathfinding...")
