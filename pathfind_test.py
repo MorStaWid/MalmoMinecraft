@@ -15,6 +15,7 @@ from malmo.MalmoPython import AgentHost
 
 INSERT_STRING_HERE =  "Reinforcement Learning Equipment"
 
+
 OPTIONS = {
     "Block Surround": (0, 14, -9),
     "1x1 Maze": (0, 14, 0),
@@ -72,7 +73,7 @@ def run_xml_mission():
                 <Weather>rain</Weather>
             </ServerInitialConditions> 
             <ServerHandlers>
-                <FileWorldGenerator src="C:\\Malmo-0.37.0-Windows-64bit_withBoost_Python3.7\\Minecraft\\run\\saves\\Algorithm World Test"/>
+                <FileWorldGenerator src="C:\\Malmo\\Minecraft\\run\\saves\\Algorithm World Test"/>
                 <ServerQuitFromTimeUp timeLimitMs="40000"/>
                 <ServerQuitWhenAnyAgentFinishes/>
 
@@ -277,6 +278,7 @@ def is_agent_in_stairs(blocks: list) -> bool:
 def adjust_to_center(agent_host: AgentHost, blocks: list, current_direction: int) -> None:
     """Make the agent center to its hallway for better navigation!"""
     pass
+
 
 def find_button_near_door(blocks: list, size: int, observation: dict) -> tuple[int, int, int] | None:
     """
@@ -829,7 +831,6 @@ def algorithm(agent_host: AgentHost) -> None:
 def save_q_table():
     with open("q_learning_rewards.pkl", "wb") as f:
         pickle.dump(q_table, f)
-
 
 def main():
     agent_host = MalmoPython.AgentHost()
