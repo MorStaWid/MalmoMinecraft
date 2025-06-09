@@ -414,11 +414,20 @@ def handle_door(agent_host: AgentHost, observation: dict, visited_block_coord: s
     return False
 
 def get_state(observation):
-    health = int(observation.get("Life", 20))
-    food = int(observation.get("Food", 20))
-    equipped = observation.get("HotbarSlot", 0)
-    nearby_zombie = any(e["name"] == "Zombie" for e in observation.get("entities", []))
-    return (health, food, equipped, nearby_zombie)
+    if "entities" in observation:
+        for entity in observation["entities"]:
+            if entity["name"].lower() == "zombie":
+                distance = math.sqrt(entity["x"]**2 + entity["z"]**2)
+                health = entity.get("life", 20)
+
+                if distance > 3:
+                    return "zombie_far"
+                elif health < 10:
+                    return "zombie_low_health"
+                else:
+                    return "zombie_high_health"
+
+    return "no_zombie"
 
 def choose_action(state):
     global q_table
@@ -461,7 +470,7 @@ def update_q_table(state, action, reward, next_state):
 
 def combat_behavior(agent_host, observation, current_yaw):
 
-    
+    print("Combat behavior called")
 
     if "entities" not in observation or not observation["entities"]:
         print("No entities detected in combat_behavior.")
@@ -496,10 +505,11 @@ def combat_behavior(agent_host, observation, current_yaw):
         distance = math.sqrt(min_dist)
 
         if distance > 3:
+            print("distance > 3")
             agent_host.sendCommand("move 1")
         else:
             agent_host.sendCommand("move 0")
-
+            print("Getting state...")
             # Choose and execute Q-learned action
             state = get_state(observation)
             chosen_action = choose_action(state)
@@ -605,13 +615,10 @@ def algorithm(agent_host: AgentHost) -> None:
                         print("Pre-combat yaw:", pre_combat_yaw)
 
                 if current_state == "FIGHTING":
+                    next_state = get_state(observation)
                     action = combat_behavior(agent_host, observation, observation.get("Yaw", 0))
 
-                    # ✅ Q-learning Reward Assignment
-                    next_state = get_state(observation)
                     reward = 0
-
-                    # Reward logic based on observation
                     if "DamageDealt" in observation and observation["DamageDealt"] > 0:
                         reward += 2
                     if "DamageTaken" in observation and observation["DamageTaken"] > 0:
@@ -621,16 +628,16 @@ def algorithm(agent_host: AgentHost) -> None:
                     if observation.get("DamageTaken", 0) == 0:
                         reward += 3  # bonus for flawless fight
 
+                    print("State:", next_state)
+                    print("Action taken:", action)
                     print("Reward this step:", reward)
 
-                    # Q-learning update
                     if last_state is not None and last_action is not None:
-                        print("Updating Q-table for:", last_state, "→", last_action, "→", reward)
+                        print(f"Updating Q-table for: {last_state} → {last_action} → {reward}")
                         update_q_table(last_state, last_action, reward, next_state)
                     else:
                         print("Skipping Q-update: missing last_state or last_action")
 
-                    # Save current for next step
                     last_state = next_state
                     last_action = action
 
@@ -773,21 +780,11 @@ def algorithm(agent_host: AgentHost) -> None:
                         agent_host.sendCommand("turn 0")
                         # auto_correct_yaw(agent_host, current_direction)
 
-                    # print("\nVisited Blocks:", list(visited_block_coord))
-                    # print("To Be Visited:", list(to_be_visited))
-                    # print("Current Direction: ", current_direction)
-                    # print("------------------------------------------------------------------")
+                    print("\nVisited Blocks:", list(visited_block_coord))
+                    print("To Be Visited:", list(to_be_visited))
+                    print("Current Direction: ", current_direction)
+                    print("------------------------------------------------------------------")
                     agent_host.sendCommand("move 1")
-                    # print("Attempting to switch to stone sword...")
-                    # # Try alternative approach using swapInventoryItems
-                    # current_slot = observation.get("HotbarSlot", 0)
-                    # agent_host.sendCommand(f"swapInventoryItems {current_slot} 3")  # Move stone sword to current slot
-                    # time.sleep(0.1)
-                    # print("Inventory swap command sent")
-                    
-                    # # Add debug print for observation
-                    # if "HotbarSlot" in observation:
-                    #     print(f"Current hotbar slot: {observation['HotbarSlot']}")
             
             elif current_state == "FIGHTING" and (len(observation["entities"]) <= 1 or not any(e["name"].lower() == "zombie" for e in observation["entities"])):
                 print("Combat over. Returning to pathfinding...")
