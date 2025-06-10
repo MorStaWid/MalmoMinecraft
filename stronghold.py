@@ -203,6 +203,120 @@ class Golly(object):
     # through a Minecraft stronghold structure. It includes functionality for teleporting to stronghold
     # coordinates, finding the portal room, and handling movement/navigation within the stronghold.
 
+    def normalize_yaw(self, yaw):
+        """Normalize yaw to nearest cardinal direction (0, 90, 180, 270, -90, -180, -270)"""
+        # First normalize to 0-360
+        yaw = yaw % 360
+        # Round to nearest 90 degrees
+        cardinal = round(yaw / 90) * 90
+        # Convert to negative if it's closer to negative
+        if cardinal > 180:
+            cardinal = cardinal - 360
+        return cardinal
+
+    def get_cardinal_direction(self, yaw):
+        """Convert yaw to nearest cardinal direction (0, 90, 180, 270)"""
+        # Normalize yaw to 0-360
+        yaw = yaw % 360
+        # Round to nearest 90 degrees
+        cardinal = round(yaw / 90) * 90
+        # Ensure we get exactly 0, 90, 180, or 270
+        if cardinal == 360:
+            cardinal = 0
+        return cardinal
+
+    def is_at_cardinal(self, yaw):
+        """Check if the agent is facing a cardinal direction"""
+        tolerance = 0.1  # Very small tolerance for exact cardinal directions
+        normalized = self.normalize_yaw(yaw)
+        return abs(yaw - normalized) <= tolerance
+
+    def turn_to_direction(self, target_yaw):
+        """Turn the agent to face the target yaw"""
+        print(f"Starting turn to target yaw: {target_yaw}")
+        
+        while True:
+            world_state = self.agent_host.getWorldState()
+            if world_state.number_of_observations_since_last_state > 0:
+                observation = json.loads(world_state.observations[-1].text)
+                current_yaw = observation.get('Yaw', 0)
+                normalized_yaw = self.normalize_yaw(current_yaw)
+                
+                print(f"Current yaw: {current_yaw:.2f}, Normalized: {normalized_yaw}, Target: {target_yaw}")
+                
+                # Stop if we reach any cardinal direction
+                if self.is_at_cardinal(current_yaw):
+                    print(f"Reached cardinal direction: {normalized_yaw}")
+                    self.agent_host.sendCommand("turn 0")
+                    return
+                
+                # Calculate shortest turn direction
+                diff = (target_yaw - current_yaw) % 360
+                if diff > 180:
+                    print("Turning left")
+                    self.agent_host.sendCommand("turn -1")
+                else:
+                    print("Turning right")
+                    self.agent_host.sendCommand("turn 1")
+            
+            time.sleep(0.05)  # Check more frequently for more precise turning
+
+    def stabilize_direction(self, target_yaw):
+        """Stabilize the agent's direction to face exactly the target yaw"""
+        print("Stabilizing direction...")
+        stabilization_time = 2.0  # Increased time for more precise stabilization
+        start_time = time.time()
+        tolerance = 0.1  # Very small tolerance for exact yaw matching
+        
+        while time.time() - start_time < stabilization_time:
+            world_state = self.agent_host.getWorldState()
+            if world_state.number_of_observations_since_last_state > 0:
+                observation = json.loads(world_state.observations[-1].text)
+                current_yaw = observation.get('Yaw', 0)
+                
+                # Normalize current yaw to nearest cardinal direction
+                normalized_yaw = self.get_cardinal_direction(current_yaw)
+                print(f"Current yaw: {current_yaw:.2f}, Normalized: {normalized_yaw}, Target: {target_yaw}")
+                
+                # Check if current yaw matches both normalized and target yaw
+                if abs(current_yaw - target_yaw) <= tolerance and abs(current_yaw - normalized_yaw) <= tolerance:
+                    print(f"Exact yaw match achieved: {current_yaw:.2f}")
+                    self.agent_host.sendCommand("turn 0")
+                    break
+                
+                # If not matching, make adjustments
+                diff = (target_yaw - current_yaw) % 360
+                if diff > 180:
+                    print("Turning left to match yaw")
+                    self.agent_host.sendCommand("turn -0.1")  # Small left turn
+                else:
+                    print("Turning right to match yaw")
+                    self.agent_host.sendCommand("turn 0.1")   # Small right turn
+            
+            time.sleep(0.05)
+        
+        # Final check and stop
+        self.agent_host.sendCommand("turn 0")
+        
+        # Verify final direction
+        world_state = self.agent_host.getWorldState()
+        if world_state.number_of_observations_since_last_state > 0:
+            observation = json.loads(world_state.observations[-1].text)
+            final_yaw = observation.get('Yaw', 0)
+            final_normalized = self.get_cardinal_direction(final_yaw)
+            print(f"Final direction stabilized at: {final_yaw:.2f} degrees (normalized: {final_normalized})")
+            
+            # If still not matching, make one final adjustment
+            if abs(final_yaw - target_yaw) > tolerance:
+                print("Making final adjustment to match exact yaw")
+                diff = (target_yaw - final_yaw) % 360
+                if diff > 180:
+                    self.agent_host.sendCommand("turn -0.5")
+                else:
+                    self.agent_host.sendCommand("turn 0.5")
+                time.sleep(0.1)
+                self.agent_host.sendCommand("turn 0")
+
     def find_portal_room(self):
         # Enable creative mode for easier movement and mining
         self.agent_host.sendCommand("chat /gamemode 1")
@@ -227,6 +341,10 @@ class Golly(object):
         recovery_stage = 0                 # Different stages of unstuck behavior
         original_position = None           # Starting position reference
         current_direction = 0              # Direction facing (0:forward, 1:right, 2:back, 3:left)
+        consecutive_turns = 0              # Track consecutive turns to prevent circles
+        last_turn_time = 0                 # Track when we last turned
+        turn_cooldown = 2.0               # Minimum time between turns
+        is_moving = False                  # Track if agent is currently moving
 
         while True:
             world_state = self.agent_host.getWorldState()
@@ -253,18 +371,85 @@ class Golly(object):
                 print(f"\nCurrent Position: x={current_pos[0]}, y={current_pos[1]}, z={current_pos[2]}")
                 self.print_observation(observation)
 
-                # Check if agent is stuck in same position
-                if last_position == current_pos:
-                    stuck_count += 1
-                else:
-                    stuck_count = 0
-                    recovery_stage = 0
-                    last_position = current_pos
-
                 # Check for portal room or doors
                 if "LineOfSight" in observation:
                     block_type = observation["LineOfSight"].get("type", "")
                     distance = observation["LineOfSight"].get("distance", float('inf'))
+                    
+                    # Check if we're about to hit a wall
+                    if distance <= 1.0 and block_type not in ["air", "iron_door", "wooden_door"]:
+                        print("Wall detected! Starting wall handling sequence...")
+                        
+                        # Step 1: Stop
+                        print("Step 1: Stopping")
+                        self.agent_host.sendCommand("move 0")
+                        is_moving = False
+                        time.sleep(0.25)  # Wait for stop
+                        
+                        # Step 2: Turn right
+                        print("Step 2: Turning right")
+                        current_yaw = observation.get('Yaw', 0)
+                        print(f"Current yaw before turn: {current_yaw}")
+                        current_cardinal = self.get_cardinal_direction(current_yaw)
+                        target_yaw = (current_cardinal + 90) % 360
+                        print(f"Target yaw for turn: {target_yaw}")
+                        
+                        # Start turning
+                        print("Sending turn command")
+                        self.agent_host.sendCommand("turn 1")
+                        
+                        # Wait for turn to complete
+                        start_yaw = current_yaw
+                        turn_start_time = time.time()
+                        max_turn_time = 1.0  # Maximum time to spend turning
+                        
+                        while True:
+                            # Check if we've been turning too long
+                            if time.time() - turn_start_time > max_turn_time:
+                                print("Turn timeout - forcing stop")
+                                self.agent_host.sendCommand("turn 0")
+                                break
+                                
+                            world_state = self.agent_host.getWorldState()
+                            if world_state.number_of_observations_since_last_state > 0:
+                                observation = json.loads(world_state.observations[-1].text)
+                                current_yaw = observation.get('Yaw', 0)
+                                normalized_yaw = self.normalize_yaw(current_yaw)
+                                print(f"Turning... Current yaw: {current_yaw:.2f}, Normalized: {normalized_yaw}")
+                                
+                                # Check if we've reached the target cardinal direction
+                                if normalized_yaw == target_yaw:
+                                    print(f"Reached target cardinal direction: {normalized_yaw}")
+                                    self.agent_host.sendCommand("turn 0")
+                                    break
+                            
+                            time.sleep(0.05)
+                        
+                        current_direction = (current_direction + 1) % 4
+                        time.sleep(0.25)  # Wait after turn
+                        
+                        # Step 3: Stabilize direction
+                        print("Step 3: Stabilizing direction")
+                        self.stabilize_direction(target_yaw)
+                        
+                        # Step 4: Move forward
+                        print("Step 4: Moving forward")
+                        self.agent_host.sendCommand("move 1")
+                        is_moving = True
+                        stuck_count = 0
+                        
+                        # Force a small forward movement
+                        time.sleep(0.5)  # Move forward for a short time
+                        continue
+                    elif block_type == "air" and distance > 1.0:
+                        # If there's empty space ahead, prioritize moving forward
+                        if not is_moving:
+                            print("Empty space ahead, moving forward")
+                            self.agent_host.sendCommand("move 1")
+                            is_moving = True
+                            stuck_count = 0
+                            continue
+                    
                     if block_type == "end_portal_frame":
                         print(f"\nFound the portal room!")
                         # Clean up effects and return to normal mode
@@ -281,12 +466,24 @@ class Golly(object):
                         time.sleep(0.5)
                         self.agent_host.sendCommand("use 0")
 
+                # Check if agent is stuck in same position
+                if last_position == current_pos:
+                    stuck_count += 1
+                else:
+                    stuck_count = 0
+                    recovery_stage = 0
+                    last_position = current_pos
+
                 # Handle movement and recovery when stuck
-                if stuck_count == 0:
-                    # Normal forward movement
+                current_time = time.time()
+                if stuck_count == 0 and not is_moving:
+                    # Only move forward if we're not already moving and not stuck
                     print("Moving forward")
                     self.agent_host.sendCommand("move 1")
-                elif recovery_stage == 0:
+                    is_moving = True
+                    consecutive_turns = 0  # Reset turn counter when moving forward
+                elif recovery_stage == 0 and (current_time - last_turn_time) >= turn_cooldown and stuck_count > 0:
+                    # Only turn if we're stuck and enough time has passed since last turn
                     # Calculate potential new directions
                     right_turn_direction = (current_direction + 1) % 4
                     left_turn_direction = (current_direction - 1) % 4
@@ -299,55 +496,58 @@ class Golly(object):
                     right_distance = self.calculate_distance(right_pos, original_position)
                     left_distance = self.calculate_distance(left_pos, original_position)
                     
-                    # Add randomness to direction choice
+                    # Add randomness to direction choice, but prefer moving away from start
                     random_choice = random.random() < 0.2
                     
-                    if random_choice or right_distance < left_distance:
+                    # Stop before turning
+                    print("Stopping before turn")
+                    self.agent_host.sendCommand("move 0")
+                    is_moving = False
+                    time.sleep(0.25)  # Wait for stop
+                    
+                    # Choose direction that moves away from start more often
+                    if (random_choice and right_distance > left_distance) or (not random_choice and right_distance < left_distance):
                         # Try turning right
                         print("Trying to turn right")
-                        self.agent_host.sendCommand("turn 1")
-                        time.sleep(0.5)
-                        self.agent_host.sendCommand("turn 0")
-                        self.agent_host.sendCommand("move 1")
+                        current_yaw = observation.get('Yaw', 0)
+                        current_cardinal = self.get_cardinal_direction(current_yaw)
+                        target_yaw = (current_cardinal + 90) % 360
+                        self.turn_to_direction(target_yaw)
+                        self.stabilize_direction(target_yaw)
                         current_direction = right_turn_direction
                     else:
                         # Try turning left
                         print("Trying to turn left")
-                        self.agent_host.sendCommand("turn -1")
-                        time.sleep(0.5)
-                        self.agent_host.sendCommand("turn 0")
-                        self.agent_host.sendCommand("move 1")
+                        current_yaw = observation.get('Yaw', 0)
+                        current_cardinal = self.get_cardinal_direction(current_yaw)
+                        target_yaw = (current_cardinal - 90) % 360
+                        self.turn_to_direction(target_yaw)
+                        self.stabilize_direction(target_yaw)
                         current_direction = left_turn_direction
                     
-                    recovery_stage = 1
-                elif recovery_stage == 1:
-                    # Try opposite direction from first attempt
-                    if current_direction % 2 == 0:  # If previously went right
-                        print("Trying to turn left")
-                        self.agent_host.sendCommand("turn -1")
-                        time.sleep(0.5)
-                        self.agent_host.sendCommand("turn 0")
-                        self.agent_host.sendCommand("move 1")
-                        current_direction = (current_direction - 1) % 4
-                    else:  # If previously went left
-                        print("Trying to turn right")
-                        self.agent_host.sendCommand("turn 1")
-                        time.sleep(0.5)
-                        self.agent_host.sendCommand("turn 0")
-                        self.agent_host.sendCommand("move 1")
-                        current_direction = (current_direction + 1) % 4
-                    recovery_stage = 2
-                elif recovery_stage == 2:
-                    # Last resort: try to mine through
-                    print("Mining through")
-                    self.agent_host.sendCommand("pitch 0.2")
-                    time.sleep(0.5)
-                    self.agent_host.sendCommand("attack 1")
-                    time.sleep(0.5)
-                    self.agent_host.sendCommand("attack 0")
-                    self.agent_host.sendCommand("pitch -0.2")
-                    self.agent_host.sendCommand("move 1")
-                    recovery_stage = 3  # Reset recovery stage
+                    consecutive_turns += 1
+                    last_turn_time = current_time
+                    
+                    # If we've turned too many times in a row, try to break the pattern
+                    if consecutive_turns >= 3:
+                        print("Too many consecutive turns, trying to break pattern")
+                        # Turn 180 degrees to go back
+                        current_yaw = observation.get('Yaw', 0)
+                        current_cardinal = self.get_cardinal_direction(current_yaw)
+                        target_yaw = (current_cardinal + 180) % 360
+                        self.turn_to_direction(target_yaw)
+                        current_direction = (current_direction + 2) % 4
+                        consecutive_turns = 0
+                    
+                    # Check if we can move forward after turning
+                    if "LineOfSight" in observation:
+                        block_type = observation["LineOfSight"].get("type", "")
+                        distance = observation["LineOfSight"].get("distance", float('inf'))
+                        if block_type == "air" and distance > 1.0:
+                            print("Moving forward after turn")
+                            self.agent_host.sendCommand("move 1")
+                            is_moving = True
+                            recovery_stage = 1
 
                 # Track visited positions
                 visited_positions.add(current_pos)
@@ -355,9 +555,15 @@ class Golly(object):
                 # Reset if too many positions visited
                 if len(visited_positions) > 100:
                     print("Too many visited positions, resetting direction")
+                    self.agent_host.sendCommand("move 0")
+                    is_moving = False
+                    time.sleep(0.25)
                     self.agent_host.sendCommand("turn 1")
-                    time.sleep(0.5)
+                    time.sleep(turn_time * 2)  # Turn 180 degrees
+                    self.agent_host.sendCommand("turn 0")
+                    current_direction = (current_direction + 2) % 4
                     visited_positions.clear()
+                    consecutive_turns = 0
 
             time.sleep(0.1)
 

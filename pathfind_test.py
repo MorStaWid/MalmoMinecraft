@@ -227,20 +227,97 @@ def get_y_elevation_offset(blocks: list, index: int, size: int) -> int | None:
 
     return y
 
-def check_clearance(curr_block_coord, current_direction: int, to_be_visited: set) -> bool:
+def check_clearance(curr_block_coord, current_direction: int, to_be_visited: set, blocks: list, observation: dict) -> bool:
+    """
+    Check if the path in the given direction is clear (not blocked by walls) and has blocks to visit.
+    
+    Parameters:
+        curr_block_coord: Current block coordinates (x, y, z)
+        current_direction: Direction to check (0=North, 1=East, 2=South, 3=West)
+        to_be_visited: Set of coordinates that need to be visited
+        blocks: List of blocks from observation grid
+        observation: Current observation data
+        
+    Returns:
+        bool: True if path is clear and has blocks to visit, False otherwise
+    """
     direction_offset = {
-        0: (0, -2),
-        1: (2, 0),
-        2: (0, 2),
-        3: (-2, 0),
+        0: (0, -2),  # North
+        1: (2, 0),   # East
+        2: (0, 2),   # South
+        3: (-2, 0),  # West
     }
+    
     x_offset, z_offset = direction_offset[current_direction]
+    
+    # First check if there are blocks to visit in this direction
+    has_blocks_to_visit = False
     for y_offset in range(-2, 3):
         check_pos = (curr_block_coord[0] + x_offset, curr_block_coord[1] + y_offset, curr_block_coord[2] + z_offset)
         if check_pos in to_be_visited:
-            return True
-
-    return False
+            has_blocks_to_visit = True
+            break
+    
+    if not has_blocks_to_visit:
+        return False
+    
+    # Now check if the path is physically clear (not blocked by walls)
+    # We need to check the immediate next block in the direction
+    immediate_offset = {
+        0: (0, -1),  # North
+        1: (1, 0),   # East
+        2: (0, 1),   # South
+        3: (-1, 0),  # West
+    }
+    
+    imm_x_offset, imm_z_offset = immediate_offset[current_direction]
+    
+    # Get agent's current position in the grid
+    agent_x = math.floor(observation["XPos"])
+    agent_z = math.floor(observation["ZPos"])
+    
+    # Calculate the position we want to move to
+    next_x = agent_x + imm_x_offset
+    next_z = agent_z + imm_z_offset
+    
+    # Convert world coordinates to grid indices
+    # Grid center is at agent's position, so we need to find the relative position
+    rel_x = next_x - agent_x + 2  # +2 because grid center is at index 2
+    rel_z = next_z - agent_z + 2  # +2 because grid center is at index 2
+    
+    # Check if the coordinates are within the 5x5 grid bounds
+    if 0 <= rel_x < 5 and 0 <= rel_z < 5:
+        # Check blocks at agent level (y=0) and above (y=1) for clearance
+        for y_level in [3, 4]:  # y=3 is agent level, y=4 is one block above
+            block_index = (y_level * 25) + (rel_z * 5) + rel_x
+            
+            if block_index < len(blocks):
+                block_type = blocks[block_index]
+                
+                # Define blocks that block movement
+                solid_blocks = {
+                    "stone", "cobblestone", "mossy_cobblestone", "stone_bricks", 
+                    "mossy_stone_bricks", "cracked_stone_bricks", "sandstone",
+                    "oak_planks", "birch_planks", "spruce_planks", "jungle_planks",
+                    "acacia_planks", "dark_oak_planks", "bedrock", "obsidian",
+                    "iron_block", "gold_block", "diamond_block", "emerald_block",
+                    "coal_block", "redstone_block", "lapis_block", "dirt", "grass_block",
+                    "gravel", "sand", "glass", "wool", "iron_door", "oak_door",
+                    "birch_door", "spruce_door", "jungle_door", "acacia_door",
+                    "dark_oak_door", "fence", "iron_bars", "oak_fence", "wall"
+                }
+                
+                # If we hit a solid block at head level (y=4), path is blocked
+                if y_level == 4 and block_type in solid_blocks:
+                    return False
+                
+                # If we hit a solid block at feet level (y=3), check if it's a door
+                if y_level == 3 and block_type in solid_blocks:
+                    # Allow movement through doors
+                    if "door" not in block_type.lower():
+                        return False
+    
+    return True
 
 def auto_correct_yaw(agent_host: AgentHost, yaw: float, current_direction: int) -> None:
     """Attempt the agent to align to its perfect yaw as there's a chance it can over-rotate or under-rotate!"""
@@ -711,12 +788,12 @@ def algorithm(agent_host: AgentHost) -> None:
                 auto_correct_yaw(agent_host, observation["Yaw"], current_direction)
                 if is_in_backtrack:
                     curr_block = block_visit.pop()
-                    is_forward_cleared = check_clearance(curr_block, current_direction % 4, to_be_visited)
+                    is_forward_cleared = check_clearance(curr_block, current_direction % 4, to_be_visited, observation["blocks"], observation)
                     if is_forward_cleared:
                         is_in_backtrack = False
                         continue
-                    is_left_cleared = check_clearance(curr_block, (current_direction - 1) % 4, to_be_visited)
-                    is_right_cleared = check_clearance(curr_block, (current_direction + 1) % 4, to_be_visited)
+                    is_left_cleared = check_clearance(curr_block, (current_direction - 1) % 4, to_be_visited, observation["blocks"], observation)
+                    is_right_cleared = check_clearance(curr_block, (current_direction + 1) % 4, to_be_visited, observation["blocks"], observation)
                     curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
 
                     if curr_turn != 0:
@@ -798,10 +875,10 @@ def algorithm(agent_host: AgentHost) -> None:
                         agent_host.sendCommand("move 0")
                         break
 
-                    is_forward_cleared = check_clearance(block_visit[-1], current_direction % 4, to_be_visited)
+                    is_forward_cleared = check_clearance(block_visit[-1], current_direction % 4, to_be_visited, observation["blocks"], observation)
                     if not is_forward_cleared:
-                        is_left_cleared = check_clearance(block_visit[-1], (current_direction - 1) % 4, to_be_visited)
-                        is_right_cleared = check_clearance(block_visit[-1], (current_direction + 1) % 4, to_be_visited)
+                        is_left_cleared = check_clearance(block_visit[-1], (current_direction - 1) % 4, to_be_visited, observation["blocks"], observation)
+                        is_right_cleared = check_clearance(block_visit[-1], (current_direction + 1) % 4, to_be_visited, observation["blocks"], observation)
                         curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
 
                         # Adjust agent to the center block as it doesn't stop immediately.
