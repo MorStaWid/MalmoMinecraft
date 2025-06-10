@@ -309,13 +309,13 @@ def adjust_to_center(agent_host: AgentHost, blocks: list, size: int, current_dir
     if (blocks[112 + curr_corner_direction[0]] == "air" and is_y_offset_left) and blocks[112 + (curr_corner_direction[1] + offset_calc)] != "air":
         agent_host.sendCommand("move 0")
         agent_host.sendCommand("strafe -1")
-        time.sleep(0.2)
+        time.sleep(1 / 4.317)
         agent_host.sendCommand("strafe 0")
     # Turn right if there's a clearance
     elif blocks[112 + curr_corner_direction[0] - offset_calc] != "air" and (blocks[112 + curr_corner_direction[1]] == "air" and is_y_offset_right):
         agent_host.sendCommand("move 0")
         agent_host.sendCommand("strafe 1")
-        time.sleep(0.2)
+        time.sleep(1 / 4.317)
         agent_host.sendCommand("strafe 0")
 
 
