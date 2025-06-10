@@ -761,7 +761,6 @@ def algorithm(agent_host: AgentHost) -> None:
                         current_direction = (current_direction + turn) % 4
                 else:
                     block_visit.append(standing_block)
-                    adjust_to_center(agent_host, observation["blocks"], size, current_direction)
                     # agent_host.sendCommand(f"chat /setblock {block_visit[-1][0]} {block_visit[-1][1]} {block_visit[-1][2]} minecraft:gold_block")
                     for i in range(size ** 2):
                         r_edge, c_edge = divmod(i, size)
@@ -821,6 +820,7 @@ def algorithm(agent_host: AgentHost) -> None:
                             time.sleep(2)
                         agent_host.sendCommand("turn 0")
                         # auto_correct_yaw(agent_host, current_direction)
+                    adjust_to_center(agent_host, observation["blocks"], size, current_direction)
 
                 # print("\nVisited Blocks:", list(visited_block_coord))
                 # print("To Be Visited:", list(to_be_visited))
