@@ -1,6 +1,4 @@
-<<<<<<< HEAD
-# MalmoMinecraft
-=======
+
 # Malmo Stronghold Project
 
 This project contains a Python script for navigating and exploring Minecraft strongholds using the Malmo platform.
@@ -44,4 +42,4 @@ py -3.7 stronghold.py
 
 - The script uses the Malmo platform installed in the parent directory
 - Original Malmo example files are kept in the parent directory for reference 
->>>>>>> 1142579 (Initial commit: Project setup with stronghold.py, README, and requirements)
+
