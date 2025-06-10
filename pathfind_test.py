@@ -13,7 +13,7 @@ import random
 from malmo import MalmoPython
 from malmo.MalmoPython import AgentHost
 
-INSERT_STRING_HERE =  "Reinforcement Learning Equipment"
+INSERT_STRING_HERE =  "Center Adjustment"
 
 
 OPTIONS = {
@@ -30,9 +30,11 @@ OPTIONS = {
     "Hidden Path": (-49, 14, 0),
     "Slabbed Hidden Path": (-56, 14, 0),
     "Five-way Crossing": (-60, 14, 21),
+    "Five-way Crossing Upper": (-63, 16, 27),
     "Fountain": (-59, 14, 45),
     "Portal Room Detection": (-65, 14, 0),
-    "Reinforcement Learning Equipment": (-41, 14, -31)
+    "Reinforcement Learning Equipment": (-41, 14, -31),
+    "Center Adjustment": (-56, 14, -31)
 }
 
 # === Reinforcement Learning Setup ===
@@ -218,9 +220,9 @@ def log_block_observations(visited_block_coord, to_be_visited, observation):
 # above is air or other acceptable blocks, we return the y offset. The purpose is to check for downward and upward blocks around.
 def get_y_elevation_offset(blocks: list, index: int, size: int) -> int | None:
     y = None
-    accepted_above_block = {"air", "wooden_door", "iron_door", "brown_mushroom", "red_mushroom", "torch"}
+    accepted_above_block = {"air", "wooden_door", "iron_door", "brown_mushroom", "red_mushroom", "torch", "stone_button"}
     for i in range(len(blocks) // (size ** 2) - 2):
-        if blocks[(i * 25) + index] != "air" and blocks[(i + 1) * 25 + index] in accepted_above_block and blocks[(i + 2) * 25 + index] in accepted_above_block:
+        if blocks[(i * 25) + (index % 25)] != "air" and blocks[(i + 1) * 25 + (index % 25)] in accepted_above_block and blocks[(i + 2) * 25 + (index % 25)] in accepted_above_block:
             y = i - 2
 
     return y
@@ -275,9 +277,46 @@ def is_agent_in_stairs(blocks: list) -> bool:
     """If the agent appears to be in stairs on the grid, do not proceed! Also helps resolve stair issues!"""
     return blocks[87].endswith("_stairs")
 
-def adjust_to_center(agent_host: AgentHost, blocks: list, current_direction: int) -> None:
+def adjust_to_center(agent_host: AgentHost, blocks: list, size: int, current_direction: int) -> None:
     """Make the agent center to its hallway for better navigation!"""
-    pass
+    corner_direction_map = {
+        0: (-12, -8),
+        1: (-8, 12),
+        2: (12, 8),
+        3: (8, -12)
+    }
+
+    curr_corner_direction = corner_direction_map[current_direction]
+    if current_direction == 0:
+        offset_calc = -1
+    elif current_direction == 1:
+        offset_calc = -5
+    elif current_direction == 2:
+        offset_calc = 1
+    elif current_direction == 3:
+        offset_calc = 5
+    else:
+        print("ERROR: Unknown direction ID when calculating adjustment!")
+        return
+
+    # 112 is the block on player's head
+
+    # For second check, get the y elevation offset
+    is_y_offset_left = get_y_elevation_offset(blocks, 112 + curr_corner_direction[0], size) is not None
+    is_y_offset_right = get_y_elevation_offset(blocks, 112 + curr_corner_direction[1], size) is not None
+
+    # Turn left if there's a clearance
+    if (blocks[112 + curr_corner_direction[0]] == "air" and is_y_offset_left) and blocks[112 + (curr_corner_direction[1] + offset_calc)] != "air":
+        agent_host.sendCommand("move 0")
+        agent_host.sendCommand("strafe -1")
+        time.sleep(1 / 4.317)
+        agent_host.sendCommand("strafe 0")
+    # Turn right if there's a clearance
+    elif blocks[112 + curr_corner_direction[0] - offset_calc] != "air" and (blocks[112 + curr_corner_direction[1]] == "air" and is_y_offset_right):
+        agent_host.sendCommand("move 0")
+        agent_host.sendCommand("strafe 1")
+        time.sleep(1 / 4.317)
+        agent_host.sendCommand("strafe 0")
 
 
 def find_button_near_door(blocks: list, size: int, observation: dict) -> tuple[int, int, int] | None:
@@ -781,11 +820,12 @@ def algorithm(agent_host: AgentHost) -> None:
                             time.sleep(2)
                         agent_host.sendCommand("turn 0")
                         # auto_correct_yaw(agent_host, current_direction)
+                    adjust_to_center(agent_host, observation["blocks"], size, current_direction)
 
-                print("\nVisited Blocks:", list(visited_block_coord))
-                print("To Be Visited:", list(to_be_visited))
-                print("Current Direction: ", current_direction)
-                print("------------------------------------------------------------------")
+                # print("\nVisited Blocks:", list(visited_block_coord))
+                # print("To Be Visited:", list(to_be_visited))
+                # print("Current Direction: ", current_direction)
+                # print("------------------------------------------------------------------")
                 agent_host.sendCommand("move 1")
             
             elif current_state == "FIGHTING" and (len(observation["entities"]) <= 1 or not any(e["name"].lower() == "zombie" for e in observation["entities"])):
