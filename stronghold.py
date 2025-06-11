@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import pickle
 import random
 import re
 import sys
@@ -17,6 +19,26 @@ from malmo.MalmoPython import AgentHost
 X_COORD = random.randint(-24320, 24320)
 Z_COORD = random.randint(-24320, 24320)
 
+# === Reinforcement Learning Setup ===
+ACTIONS = ["diamond_sword", "diamond_axe", "bow", "stone_sword", "stone_axe", "eat_food"]
+HOTBAR_SLOTS = {
+    "diamond_sword": 0,
+    "diamond_axe": 1,
+    "bow": 2,
+    "stone_sword": 3,
+    "stone_axe": 4,
+    "eat_food": 7
+}
+
+Q_SAVE_PATH = "q_learning_combat.pkl"
+q_table = {}
+last_state = None
+last_action = None
+
+if os.path.exists(Q_SAVE_PATH):
+    with open(Q_SAVE_PATH, "rb") as f:
+        q_table = pickle.load(f)
+
 def run_xml_mission():
     return '''<?xml version="1.0" encoding="UTF-8" ?>
     <Mission xmlns="http://ProjectMalmo.microsoft.com" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -30,27 +52,43 @@ def run_xml_mission():
                     <StartTime>1000</StartTime>
                     <AllowPassageOfTime>false</AllowPassageOfTime>
                 </Time>
+                <AllowSpawning>true</AllowSpawning>
+                <AllowedMobs>Zombie</AllowedMobs>
                 <Weather>clear</Weather>
             </ServerInitialConditions> 
             <ServerHandlers>
                 <FileWorldGenerator src="C:\\Malmo\\Minecraft\\run\\saves\\FlatWorld Stronghold Malmo"/>
-                <ServerQuitFromTimeUp timeLimitMs="10000"/>
+                <ServerQuitFromTimeUp timeLimitMs="120000"/>
                 <ServerQuitWhenAnyAgentFinishes/>
             </ServerHandlers>
         </ServerSection>
         
-        <AgentSection mode="Creative">
+        <AgentSection mode="Survival">
             <Name>Golly</Name>
             <AgentStart>
                 <Placement x="''' + str(X_COORD + 0.5) + '''" y="64" z="''' + str(Z_COORD) + '''"/>
                 <Inventory>
-                    <InventoryItem slot="0" type="diamond_pickaxe"/>
+                    <InventoryItem slot="0" type="diamond_sword"/>
+                    <InventoryItem slot="1" type="diamond_axe"/>
+                    <InventoryItem slot="2" type="bow"/>
+                    <InventoryItem slot="3" type="stone_sword"/>
+                    <InventoryItem slot="4" type="stone_axe"/>
+                    <InventoryItem slot="5" type="dirt" quantity="1"/>
+                    <InventoryItem slot="6" type="arrow" quantity="30"/>
+                    <InventoryItem slot="7" type="cooked_beef" quantity="10"/>
                 </Inventory>
             </AgentStart>
             <AgentHandlers>
                 <ObservationFromFullStats/>
                 <ObservationFromChat/>
                 <ObservationFromRay/>
+                <ObservationFromHotBar/>
+                <RewardForDamagingEntity>
+                    <Mob type="Zombie" reward="10"/>
+                </RewardForDamagingEntity>
+                <ObservationFromNearbyEntities>
+                    <Range name="entities" xrange="10" yrange="2" zrange="10" />
+                </ObservationFromNearbyEntities>
                 <ObservationFromGrid>
                     <Grid name="blocks">
                         <min x="-2" y="-3" z="-2"/>
@@ -59,11 +97,103 @@ def run_xml_mission():
                 </ObservationFromGrid>
                 <AbsoluteMovementCommands/>
                 <ContinuousMovementCommands turnSpeedDegs="90"/>
+                <InventoryCommands/>
                 <ChatCommands/>
                 <MissionQuitCommands/>
             </AgentHandlers>
         </AgentSection>
     </Mission>'''
+
+
+def log_block_observations(visited_block_coord, to_be_visited, observation):
+    """
+    Continuously logs the visited blocks and blocks to visit to agent file.
+    Parameters:
+        visited_block_coord (set): Set of visited block coordinates (x, y, z)
+        to_be_visited (set): Set of block coordinates queued for exploration
+        observation (dict): Dictionary containing current observations
+    Returns:
+        None
+    """
+    # Write new observations to file
+    with open('block_observations.txt', 'a') as f:
+        f.write("\n=== New Observation ===\n")
+
+        # Write agent orientation info
+        f.write(f"\nAgent Orientation:\n")
+        f.write(f"Yaw: {observation.get('Yaw', 'N/A')}\n")
+        f.write(f"Pitch: {observation.get('Pitch', 'N/A')}\n")
+
+        # Write line of sight info if available
+        if "LineOfSight" in observation:
+            los = observation["LineOfSight"]
+            f.write(f"\nLine of Sight:\n")
+            f.write(f"Type: {los.get('type', 'N/A')}\n")
+            f.write(f"Distance: {los.get('distance', 'N/A')}\n")
+
+        # Group blocks by Y level
+        blocks_by_y = {}
+        for block in visited_block_coord:
+            x, y, z = block
+            if y not in blocks_by_y:
+                blocks_by_y[y] = []
+            blocks_by_y[y].append(block)
+
+        # Get agent Y position
+        agent_y = math.floor(observation.get("YPos", 0))
+
+        # Print blocks for all Y levels in grid range (-3 to +2)
+        for relative_y in range(-3, 3):
+            y = agent_y + relative_y
+
+            f.write(f"\nY = {y} / {relative_y}\n")
+
+            # Calculate base index for this Y level
+            base_index = (relative_y + 3) * 25  # 25 blocks per layer (5x5)
+
+            # Print 5x5 grid representation
+            f.write("Grid Layout:\n")
+            for row in range(5):
+                grid_row = []
+                for col in range(5):
+                    idx = base_index + (row * 5) + col
+                    grid_row.append(f"[{idx:3d}]")
+                f.write("  ".join(grid_row) + "\n")
+            f.write("\n")
+
+            # Print block details
+            f.write("Block Details:\n")
+            for i in range(25):  # Iterate through all blocks in the 5x5 grid
+                idx = base_index + i
+                if idx < len(observation["blocks"]):
+                    block_type = observation["blocks"][idx]
+                    # Calculate relative coordinates for this block
+                    rel_x = (i % 5) - 2  # Center is at x=0
+                    rel_z = (i // 5) - 2  # Center is at z=0
+                    # Calculate absolute coordinates
+                    abs_x = math.floor(observation["XPos"]) + rel_x
+                    abs_z = math.floor(observation["ZPos"]) + rel_z
+                    f.write(f"[{idx}] ({abs_x}, {y}, {abs_z}) - {block_type}")
+
+                    # Agent is at center of grid (x=0,z=0) at y=0 level
+                    if relative_y == 0 and rel_x == 0 and rel_z == 0:
+                        f.write(" <-- Agent Position")
+                    f.write("\n")
+            f.write("\n")
+
+        # Print visited blocks
+        f.write("\nVisited Blocks:\n")
+        for block in visited_block_coord:
+            f.write(f"{block}\n")
+
+        # Print blocks to visit
+        f.write("\nBlocks to Visit:\n")
+        for block in to_be_visited:
+            f.write(f"{block}\n")
+
+        f.write("\n" + "-" * 50 + "\n")
+        f.flush()  # Ensure the file is written immediately
+
 
 class Golly(object):
     def __init__(self, agent_host: AgentHost):
@@ -73,6 +203,7 @@ class Golly(object):
 
         self.block_visit = [(0, 0, 0)]
         self.is_in_backtrack = False
+        self.current_state = "PATHFINDING"
 
     def get_stronghold_coords(self, observation: dict) -> (int, int):
         coords = None
@@ -94,7 +225,6 @@ class Golly(object):
             world_state = self.agent_host.getWorldState()
             if world_state.is_mission_running and world_state.number_of_observations_since_last_state > 0:
                 observation = json.loads(world_state.observations[-1].text)
-                print(observation)
                 if not "LineOfSight" in observation:
                     continue
 
@@ -129,31 +259,109 @@ class Golly(object):
         if world_state.is_mission_running and world_state.number_of_observations_since_last_state > 0:
             pass
 
+
     # Start from the bottom of the block x z and compute based on presence. If the initial block is "occupied" and the one
     # above is air or other acceptable blocks, we return the y offset. The purpose is to check for downward and upward blocks around.
     def get_y_elevation_offset(self, blocks: list, index: int, size: int) -> int | None:
         y = None
-        accepted_above_block = {"air", "wooden_door", "iron_door", "brown_mushroom", "red_mushroom", "torch"}
+        accepted_above_block = {"air", "wooden_door", "iron_door", "brown_mushroom", "red_mushroom", "torch", "stone_button"}
         for i in range(len(blocks) // (size ** 2) - 2):
-            if blocks[(i * 25) + index] != "air" and blocks[(i + 1) * 25 + index] in accepted_above_block and blocks[(i + 2) * 25 + index] in accepted_above_block:
+            if blocks[(i * 25) + (index % 25)] != "air" and blocks[(i + 1) * 25 + (index % 25)] in accepted_above_block and blocks[(i + 2) * 25 + (index % 25)] in accepted_above_block:
                 y = i - 2
 
         return y
 
-    def check_clearance(self, curr_block_coord, current_direction: int) -> bool:
+    def check_clearance(self, curr_block_coord, current_direction: int, blocks: list, observation: dict) -> bool:
+        """
+        Check if the path in the given direction is clear (not blocked by walls) and has blocks to visit.
+
+        Parameters:
+            curr_block_coord: Current block coordinates (x, y, z)
+            current_direction: Direction to check (0=North, 1=East, 2=South, 3=West)
+             of coordinates that need to be visited
+            blocks: List of blocks from observation grid
+            observation: Current observation data
+
+        Returns:
+            bool: True if path is clear and has blocks to visit, False otherwise
+        """
         direction_offset = {
-            0: (0, -2),
-            1: (2, 0),
-            2: (0, 2),
-            3: (-2, 0),
+            0: (0, -2),  # North
+            1: (2, 0),   # East
+            2: (0, 2),   # South
+            3: (-2, 0),  # West
         }
+
         x_offset, z_offset = direction_offset[current_direction]
+
+        # First check if there are blocks to visit in this direction
+        has_blocks_to_visit = False
         for y_offset in range(-2, 3):
             check_pos = (curr_block_coord[0] + x_offset, curr_block_coord[1] + y_offset, curr_block_coord[2] + z_offset)
             if check_pos in self.to_be_visited:
-                return True
+                has_blocks_to_visit = True
+                break
 
-        return False
+        if not has_blocks_to_visit:
+            return False
+
+        # Now check if the path is physically clear (not blocked by walls)
+        # We need to check the immediate next block in the direction
+        immediate_offset = {
+            0: (0, -1),  # North
+            1: (1, 0),   # East
+            2: (0, 1),   # South
+            3: (-1, 0),  # West
+        }
+
+        imm_x_offset, imm_z_offset = immediate_offset[current_direction]
+
+        # Get agent's current position in the grid
+        agent_x = math.floor(observation["XPos"])
+        agent_z = math.floor(observation["ZPos"])
+
+        # Calculate the position we want to move to
+        next_x = agent_x + imm_x_offset
+        next_z = agent_z + imm_z_offset
+
+        # Convert world coordinates to grid indices
+        # Grid center is at agent's position, so we need to find the relative position
+        rel_x = next_x - agent_x + 2  # +2 because grid center is at index 2
+        rel_z = next_z - agent_z + 2  # +2 because grid center is at index 2
+
+        # Check if the coordinates are within the 5x5 grid bounds
+        if 0 <= rel_x < 5 and 0 <= rel_z < 5:
+            # Check blocks at agent level (y=0) and above (y=1) for clearance
+            for y_level in [3, 4]:  # y=3 is agent level, y=4 is one block above
+                block_index = (y_level * 25) + (rel_z * 5) + rel_x
+
+                if block_index < len(blocks):
+                    block_type = blocks[block_index]
+
+                    # Define blocks that block movement
+                    solid_blocks = {
+                        "stone", "cobblestone", "mossy_cobblestone", "stone_bricks",
+                        "mossy_stone_bricks", "cracked_stone_bricks", "sandstone",
+                        "oak_planks", "birch_planks", "spruce_planks", "jungle_planks",
+                        "acacia_planks", "dark_oak_planks", "bedrock", "obsidian",
+                        "iron_block", "gold_block", "diamond_block", "emerald_block",
+                        "coal_block", "redstone_block", "lapis_block", "dirt", "grass_block",
+                        "gravel", "sand", "glass", "wool", "iron_door", "oak_door",
+                        "birch_door", "spruce_door", "jungle_door", "acacia_door",
+                        "dark_oak_door", "fence", "iron_bars", "oak_fence", "wall"
+                    }
+
+                    # If we hit a solid block at head level (y=4), path is blocked
+                    if y_level == 4 and block_type in solid_blocks:
+                        return False
+
+                    # If we hit a solid block at feet level (y=3), check if it's a door
+                    if y_level == 3 and block_type in solid_blocks:
+                        # Allow movement through doors
+                        if "door" not in block_type.lower():
+                            return False
+
+        return True
 
     def auto_correct_yaw(self, yaw: float, current_direction: int) -> None:
         """Attempt the agent to align to its perfect yaw as there's a chance it can over-rotate or under-rotate!"""
@@ -166,7 +374,7 @@ class Golly(object):
         margin_threshold = 0.5
 
         # THIS SHIT DOES NOT RECOGNIZE YAW AND PITCH! AM I FUCKING DREAMING?!!!!!!!!!!
-        # self.agent_host.sendCommand("chat /tp ~ ~ ~ {} ~".format(yaw_def[current_direction]))
+        # agent_host.sendCommand("chat /tp ~ ~ ~ {} ~".format(yaw_def[current_direction]))
 
         curr_yaw = yaw % 360
         counterclockwise_err_margin = (curr_yaw - yaw_def[current_direction]) % 360
@@ -186,417 +394,343 @@ class Golly(object):
         # Same concept as above.
         pass
 
-    def print_observation(self, observation):
-        """Print detailed information about what the agent sees"""
-        if "LineOfSight" in observation:
-            los = observation["LineOfSight"]
-            print("\n=== Line of Sight Information ===")
-            print(f"Block Type: {los.get('type', 'None')}")
-            print(f"Distance: {los.get('distance', 'Unknown')} blocks")
-            print(f"Block Position: x={los.get('x', 'Unknown')}, y={los.get('y', 'Unknown')}, z={los.get('z', 'Unknown')}")
-            print(f"Block Variant: {los.get('variant', 'None')}")
-            print("===============================\n")
-        else:
-            print("\nNo block in line of sight\n")
-
-    # This file contains the StrongholdFinder class which is responsible for locating and navigating
-    # through a Minecraft stronghold structure. It includes functionality for teleporting to stronghold
-    # coordinates, finding the portal room, and handling movement/navigation within the stronghold.
-
-    def normalize_yaw(self, yaw):
-        """Normalize yaw to nearest cardinal direction (0, 90, 180, 270, -90, -180, -270)"""
-        # First normalize to 0-360
-        yaw = yaw % 360
-        # Round to nearest 90 degrees
-        cardinal = round(yaw / 90) * 90
-        # Convert to negative if it's closer to negative
-        if cardinal > 180:
-            cardinal = cardinal - 360
-        return cardinal
-
-    def get_cardinal_direction(self, yaw):
-        """Convert yaw to nearest cardinal direction (0, 90, 180, 270)"""
-        # Normalize yaw to 0-360
-        yaw = yaw % 360
-        # Round to nearest 90 degrees
-        cardinal = round(yaw / 90) * 90
-        # Ensure we get exactly 0, 90, 180, or 270
-        if cardinal == 360:
-            cardinal = 0
-        return cardinal
-
-    def is_at_cardinal(self, yaw):
-        """Check if the agent is facing a cardinal direction"""
-        tolerance = 0.1  # Very small tolerance for exact cardinal directions
-        normalized = self.normalize_yaw(yaw)
-        return abs(yaw - normalized) <= tolerance
-
-    def turn_to_direction(self, target_yaw):
-        """Turn the agent to face the target yaw"""
-        print(f"Starting turn to target yaw: {target_yaw}")
-        
-        while True:
-            world_state = self.agent_host.getWorldState()
-            if world_state.number_of_observations_since_last_state > 0:
-                observation = json.loads(world_state.observations[-1].text)
-                current_yaw = observation.get('Yaw', 0)
-                normalized_yaw = self.normalize_yaw(current_yaw)
-                
-                print(f"Current yaw: {current_yaw:.2f}, Normalized: {normalized_yaw}, Target: {target_yaw}")
-                
-                # Stop if we reach any cardinal direction
-                if self.is_at_cardinal(current_yaw):
-                    print(f"Reached cardinal direction: {normalized_yaw}")
-                    self.agent_host.sendCommand("turn 0")
-                    return
-                
-                # Calculate shortest turn direction
-                diff = (target_yaw - current_yaw) % 360
-                if diff > 180:
-                    print("Turning left")
-                    self.agent_host.sendCommand("turn -1")
-                else:
-                    print("Turning right")
-                    self.agent_host.sendCommand("turn 1")
-            
-            time.sleep(0.05)  # Check more frequently for more precise turning
-
-    def stabilize_direction(self, target_yaw):
-        """Stabilize the agent's direction to face exactly the target yaw"""
-        print("Stabilizing direction...")
-        stabilization_time = 2.0  # Increased time for more precise stabilization
-        start_time = time.time()
-        tolerance = 0.1  # Very small tolerance for exact yaw matching
-        
-        while time.time() - start_time < stabilization_time:
-            world_state = self.agent_host.getWorldState()
-            if world_state.number_of_observations_since_last_state > 0:
-                observation = json.loads(world_state.observations[-1].text)
-                current_yaw = observation.get('Yaw', 0)
-                
-                # Normalize current yaw to nearest cardinal direction
-                normalized_yaw = self.get_cardinal_direction(current_yaw)
-                print(f"Current yaw: {current_yaw:.2f}, Normalized: {normalized_yaw}, Target: {target_yaw}")
-                
-                # Check if current yaw matches both normalized and target yaw
-                if abs(current_yaw - target_yaw) <= tolerance and abs(current_yaw - normalized_yaw) <= tolerance:
-                    print(f"Exact yaw match achieved: {current_yaw:.2f}")
-                    self.agent_host.sendCommand("turn 0")
-                    break
-                
-                # If not matching, make adjustments
-                diff = (target_yaw - current_yaw) % 360
-                if diff > 180:
-                    print("Turning left to match yaw")
-                    self.agent_host.sendCommand("turn -0.1")  # Small left turn
-                else:
-                    print("Turning right to match yaw")
-                    self.agent_host.sendCommand("turn 0.1")   # Small right turn
-            
-            time.sleep(0.05)
-        
-        # Final check and stop
-        self.agent_host.sendCommand("turn 0")
-        
-        # Verify final direction
-        world_state = self.agent_host.getWorldState()
-        if world_state.number_of_observations_since_last_state > 0:
-            observation = json.loads(world_state.observations[-1].text)
-            final_yaw = observation.get('Yaw', 0)
-            final_normalized = self.get_cardinal_direction(final_yaw)
-            print(f"Final direction stabilized at: {final_yaw:.2f} degrees (normalized: {final_normalized})")
-            
-            # If still not matching, make one final adjustment
-            if abs(final_yaw - target_yaw) > tolerance:
-                print("Making final adjustment to match exact yaw")
-                diff = (target_yaw - final_yaw) % 360
-                if diff > 180:
-                    self.agent_host.sendCommand("turn -0.5")
-                else:
-                    self.agent_host.sendCommand("turn 0.5")
-                time.sleep(0.1)
-                self.agent_host.sendCommand("turn 0")
-
-    def find_portal_room(self):
-        # Enable creative mode for easier movement and mining
-        self.agent_host.sendCommand("chat /gamemode 1")
-        time.sleep(0.5)
-        
-        # Give night vision potion to see better in dark areas
-        self.agent_host.sendCommand("chat /effect @p night_vision 999999 1 true")
-        time.sleep(0.5)
-        
-        # Enable flying capability for better navigation
-        self.agent_host.sendCommand("chat /ability @p mayfly true")
-        time.sleep(0.5)
-        
-        # Activate flying mode
-        self.agent_host.sendCommand("fly 1")
-        time.sleep(0.5)
-
-        # Initialize tracking variables
-        visited_positions = set()          # Keep track of where we've been
-        stuck_count = 0                    # Counter for when agent gets stuck
-        last_position = None               # Store previous position
-        recovery_stage = 0                 # Different stages of unstuck behavior
-        original_position = None           # Starting position reference
-        current_direction = 0              # Direction facing (0:forward, 1:right, 2:back, 3:left)
-        consecutive_turns = 0              # Track consecutive turns to prevent circles
-        last_turn_time = 0                 # Track when we last turned
-        turn_cooldown = 2.0               # Minimum time between turns
-        is_moving = False                  # Track if agent is currently moving
-
-        while True:
-            world_state = self.agent_host.getWorldState()
-            if not world_state.is_mission_running:
-                break
-
-            if world_state.number_of_observations_since_last_state > 0:
-                # Get current observation data
-                observation = json.loads(world_state.observations[-1].text)
-                
-                # Get and round current position coordinates
-                current_pos = (
-                    round(observation.get('XPos', 0), 1),
-                    round(observation.get('YPos', 0), 1),
-                    round(observation.get('ZPos', 0), 1)
-                )
-
-                # Store initial position if not already saved
-                if original_position is None:
-                    original_position = current_pos
-                    print(f"\nOriginal position saved: x={original_position[0]}, y={original_position[1]}, z={original_position[2]}")
-
-                # Display current position for debugging
-                print(f"\nCurrent Position: x={current_pos[0]}, y={current_pos[1]}, z={current_pos[2]}")
-                self.print_observation(observation)
-
-                # Check for portal room or doors
-                if "LineOfSight" in observation:
-                    block_type = observation["LineOfSight"].get("type", "")
-                    distance = observation["LineOfSight"].get("distance", float('inf'))
-                    
-                    # Check if we're about to hit a wall
-                    if distance <= 1.0 and block_type not in ["air", "iron_door", "wooden_door"]:
-                        print("Wall detected! Starting wall handling sequence...")
-                        
-                        # Step 1: Stop
-                        print("Step 1: Stopping")
-                        self.agent_host.sendCommand("move 0")
-                        is_moving = False
-                        time.sleep(0.25)  # Wait for stop
-                        
-                        # Step 2: Turn right
-                        print("Step 2: Turning right")
-                        current_yaw = observation.get('Yaw', 0)
-                        print(f"Current yaw before turn: {current_yaw}")
-                        current_cardinal = self.get_cardinal_direction(current_yaw)
-                        target_yaw = (current_cardinal + 90) % 360
-                        print(f"Target yaw for turn: {target_yaw}")
-                        
-                        # Start turning
-                        print("Sending turn command")
-                        self.agent_host.sendCommand("turn 1")
-                        
-                        # Wait for turn to complete
-                        start_yaw = current_yaw
-                        turn_start_time = time.time()
-                        max_turn_time = 1.0  # Maximum time to spend turning
-                        
-                        while True:
-                            # Check if we've been turning too long
-                            if time.time() - turn_start_time > max_turn_time:
-                                print("Turn timeout - forcing stop")
-                                self.agent_host.sendCommand("turn 0")
-                                break
-                                
-                            world_state = self.agent_host.getWorldState()
-                            if world_state.number_of_observations_since_last_state > 0:
-                                observation = json.loads(world_state.observations[-1].text)
-                                current_yaw = observation.get('Yaw', 0)
-                                normalized_yaw = self.normalize_yaw(current_yaw)
-                                print(f"Turning... Current yaw: {current_yaw:.2f}, Normalized: {normalized_yaw}")
-                                
-                                # Check if we've reached the target cardinal direction
-                                if normalized_yaw == target_yaw:
-                                    print(f"Reached target cardinal direction: {normalized_yaw}")
-                                    self.agent_host.sendCommand("turn 0")
-                                    break
-                            
-                            time.sleep(0.05)
-                        
-                        current_direction = (current_direction + 1) % 4
-                        time.sleep(0.25)  # Wait after turn
-                        
-                        # Step 3: Stabilize direction
-                        print("Step 3: Stabilizing direction")
-                        self.stabilize_direction(target_yaw)
-                        
-                        # Step 4: Move forward
-                        print("Step 4: Moving forward")
-                        self.agent_host.sendCommand("move 1")
-                        is_moving = True
-                        stuck_count = 0
-                        
-                        # Force a small forward movement
-                        time.sleep(0.5)  # Move forward for a short time
-                        continue
-                    elif block_type == "air" and distance > 1.0:
-                        # If there's empty space ahead, prioritize moving forward
-                        if not is_moving:
-                            print("Empty space ahead, moving forward")
-                            self.agent_host.sendCommand("move 1")
-                            is_moving = True
-                            stuck_count = 0
-                            continue
-                    
-                    if block_type == "end_portal_frame":
-                        print(f"\nFound the portal room!")
-                        # Clean up effects and return to normal mode
-                        self.agent_host.sendCommand("chat /effect @p clear")
-                        time.sleep(0.5)
-                        self.agent_host.sendCommand("fly 0")
-                        self.agent_host.sendCommand("chat /ability @p mayfly false")
-                        self.agent_host.sendCommand("chat /gamemode 0")
-                        return True
-                    elif block_type in ["iron_door", "wooden_door"]:
-                        # Attempt to open any doors found
-                        print(f"\nFound a door at distance {distance}")
-                        self.agent_host.sendCommand("use 1")
-                        time.sleep(0.5)
-                        self.agent_host.sendCommand("use 0")
-
-                # Check if agent is stuck in same position
-                if last_position == current_pos:
-                    stuck_count += 1
-                else:
-                    stuck_count = 0
-                    recovery_stage = 0
-                    last_position = current_pos
-
-                # Handle movement and recovery when stuck
-                current_time = time.time()
-                if stuck_count == 0 and not is_moving:
-                    # Only move forward if we're not already moving and not stuck
-                    print("Moving forward")
-                    self.agent_host.sendCommand("move 1")
-                    is_moving = True
-                    consecutive_turns = 0  # Reset turn counter when moving forward
-                elif recovery_stage == 0 and (current_time - last_turn_time) >= turn_cooldown and stuck_count > 0:
-                    # Only turn if we're stuck and enough time has passed since last turn
-                    # Calculate potential new directions
-                    right_turn_direction = (current_direction + 1) % 4
-                    left_turn_direction = (current_direction - 1) % 4
-                    
-                    # Determine possible future positions
-                    right_pos = self.calculate_future_position(current_pos, right_turn_direction)
-                    left_pos = self.calculate_future_position(current_pos, left_turn_direction)
-                    
-                    # Calculate distances to starting point
-                    right_distance = self.calculate_distance(right_pos, original_position)
-                    left_distance = self.calculate_distance(left_pos, original_position)
-                    
-                    # Add randomness to direction choice, but prefer moving away from start
-                    random_choice = random.random() < 0.2
-                    
-                    # Stop before turning
-                    print("Stopping before turn")
-                    self.agent_host.sendCommand("move 0")
-                    is_moving = False
-                    time.sleep(0.25)  # Wait for stop
-                    
-                    # Choose direction that moves away from start more often
-                    if (random_choice and right_distance > left_distance) or (not random_choice and right_distance < left_distance):
-                        # Try turning right
-                        print("Trying to turn right")
-                        current_yaw = observation.get('Yaw', 0)
-                        current_cardinal = self.get_cardinal_direction(current_yaw)
-                        target_yaw = (current_cardinal + 90) % 360
-                        self.turn_to_direction(target_yaw)
-                        self.stabilize_direction(target_yaw)
-                        current_direction = right_turn_direction
-                    else:
-                        # Try turning left
-                        print("Trying to turn left")
-                        current_yaw = observation.get('Yaw', 0)
-                        current_cardinal = self.get_cardinal_direction(current_yaw)
-                        target_yaw = (current_cardinal - 90) % 360
-                        self.turn_to_direction(target_yaw)
-                        self.stabilize_direction(target_yaw)
-                        current_direction = left_turn_direction
-                    
-                    consecutive_turns += 1
-                    last_turn_time = current_time
-                    
-                    # If we've turned too many times in a row, try to break the pattern
-                    if consecutive_turns >= 3:
-                        print("Too many consecutive turns, trying to break pattern")
-                        # Turn 180 degrees to go back
-                        current_yaw = observation.get('Yaw', 0)
-                        current_cardinal = self.get_cardinal_direction(current_yaw)
-                        target_yaw = (current_cardinal + 180) % 360
-                        self.turn_to_direction(target_yaw)
-                        current_direction = (current_direction + 2) % 4
-                        consecutive_turns = 0
-                    
-                    # Check if we can move forward after turning
-                    if "LineOfSight" in observation:
-                        block_type = observation["LineOfSight"].get("type", "")
-                        distance = observation["LineOfSight"].get("distance", float('inf'))
-                        if block_type == "air" and distance > 1.0:
-                            print("Moving forward after turn")
-                            self.agent_host.sendCommand("move 1")
-                            is_moving = True
-                            recovery_stage = 1
-
-                # Track visited positions
-                visited_positions.add(current_pos)
-
-                # Reset if too many positions visited
-                if len(visited_positions) > 100:
-                    print("Too many visited positions, resetting direction")
-                    self.agent_host.sendCommand("move 0")
-                    is_moving = False
-                    time.sleep(0.25)
-                    self.agent_host.sendCommand("turn 1")
-                    time.sleep(turn_time * 2)  # Turn 180 degrees
-                    self.agent_host.sendCommand("turn 0")
-                    current_direction = (current_direction + 2) % 4
-                    visited_positions.clear()
-                    consecutive_turns = 0
-
-            time.sleep(0.1)
-
-        # Clean up if portal room not found
-        print("Failed to find the portal room")
-        self.agent_host.sendCommand("chat /effect @p clear")
-        return False
-
-    def calculate_future_position(self, current_pos, direction):
-        """Calculate the position after moving in the given direction"""
-        x, y, z = current_pos
-        if direction == 0:  # forward
-            return (x + 1, y, z)
-        elif direction == 1:  # right
-            return (x, y, z + 1)
-        elif direction == 2:  # back
-            return (x - 1, y, z)
-        else:  # left
-            return (x, y, z - 1)
-
-    def calculate_distance(self, pos1, pos2):
-        """Calculate Euclidean distance between two positions"""
-        return ((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2 + (pos1[2] - pos2[2])**2)**0.5
-
     def is_agent_in_stairs(self, blocks: list) -> bool:
         """If the agent appears to be in stairs on the grid, do not proceed! Also helps resolve stair issues!"""
         return blocks[87].endswith("_stairs")
 
-    def adjust_to_center(self, blocks: list, current_direction: int) -> None:
+    def adjust_to_center(self, blocks: list, size: int, current_direction: int) -> None:
         """Make the agent center to its hallway for better navigation!"""
-        pass
+        corner_direction_map = {
+            0: (-12, -8),
+            1: (-8, 12),
+            2: (12, 8),
+            3: (8, -12)
+        }
+
+        curr_corner_direction = corner_direction_map[current_direction]
+        if current_direction == 0:
+            offset_calc = -1
+        elif current_direction == 1:
+            offset_calc = -5
+        elif current_direction == 2:
+            offset_calc = 1
+        elif current_direction == 3:
+            offset_calc = 5
+        else:
+            print("ERROR: Unknown direction ID when calculating adjustment!")
+            return
+
+        # 112 is the block on player's head
+
+        # For second check, get the y elevation offset
+        is_y_offset_left = self.get_y_elevation_offset(blocks, 112 + curr_corner_direction[0], size) is not None
+        is_y_offset_right = self.get_y_elevation_offset(blocks, 112 + curr_corner_direction[1], size) is not None
+
+        # Turn left if there's a clearance
+        if (blocks[112 + curr_corner_direction[0]] == "air" and is_y_offset_left) and blocks[112 + (curr_corner_direction[1] + offset_calc)] != "air":
+            self.agent_host.sendCommand("move 0")
+            self.agent_host.sendCommand("strafe -1")
+            time.sleep(1 / 4.317)
+            self.agent_host.sendCommand("strafe 0")
+        # Turn right if there's a clearance
+        elif blocks[112 + curr_corner_direction[0] - offset_calc] != "air" and (blocks[112 + curr_corner_direction[1]] == "air" and is_y_offset_right):
+            self.agent_host.sendCommand("move 0")
+            self.agent_host.sendCommand("strafe 1")
+            time.sleep(1 / 4.317)
+            self.agent_host.sendCommand("strafe 0")
+
+
+    def find_button_near_door(self, blocks: list, size: int, observation: dict) -> tuple[int, int, int] | None:
+        """
+        Search for a stone button near the iron door in the observation grid.
+        Returns the button's position (x, y, z) relative to the center if found, None otherwise.
+        """
+        # The door is typically at y=0 level in the grid (agent's level)
+        door_y = 0
+
+        # Search in a 3x3 area around the door position (which is typically in front of agent)
+        door_x, door_z = 0, 1  # One block in front of agent
+
+        # Search in a 3x3 area around the door
+        for y in range(-1, 2):  # Check one block above and below
+            for x in range(-1, 2):  # Check one block on each side
+                for z in range(0, 3):  # Check from door position to 2 blocks ahead
+                    # Calculate the index in the blocks array
+                    # Convert relative coordinates to grid indices
+                    grid_x = x + 2  # Shift x by 2 to center (0 -> 2)
+                    grid_z = z + 2  # Shift z by 2 to center (0 -> 2)
+                    grid_y = y + 3  # Shift y by 3 since y=0 is at index 75-99
+
+                    idx = (grid_y * size * size) + (grid_z * size) + grid_x
+                    if 0 <= idx < len(blocks):
+                        block_type = blocks[idx]
+                        # Calculate absolute coordinates
+                        abs_x = math.floor(observation["XPos"]) + x
+                        abs_y = math.floor(observation["YPos"]) + y
+                        abs_z = math.floor(observation["ZPos"]) + z
+                        print(f"Checking coordinates - Relative: (x={x}, y={y}, z={z}), Absolute: (x={abs_x}, y={abs_y}, z={abs_z}), block type: {block_type}")
+                        if block_type == "stone_button":
+                            # Return relative position from center
+                            return (x, y, z)
+
+        # If no button found in immediate vicinity, search in a wider area
+        for y in range(-2, 3):  # Check two blocks above and below
+            for x in range(-2, 3):  # Check two blocks on each side
+                for z in range(-1, 4):  # Check from one block behind to 3 blocks ahead
+                    # Skip the inner 3x3 area we already checked
+                    if -1 <= x <= 1 and 0 <= z <= 2:
+                        continue
+
+                    # Convert relative coordinates to grid indices
+                    grid_x = x + 2
+                    grid_z = z + 2
+                    grid_y = y + 3
+
+                    idx = (grid_y * size * size) + (grid_z * size) + grid_x
+                    if 0 <= idx < len(blocks):
+                        block_type = blocks[idx]
+                        # Calculate absolute coordinates
+                        abs_x = math.floor(observation["XPos"]) + x
+                        abs_y = math.floor(observation["YPos"]) + y
+                        abs_z = math.floor(observation["ZPos"]) + z
+                        print(f"Checking coordinates - Relative: (x={x}, y={y}, z={z}), Absolute: (x={abs_x}, y={abs_y}, z={abs_z}), block type: {block_type}")
+                        if block_type == "stone_button":
+                            return (x, y, z)
+
+        return None
+
+    def handle_door(self, observation: dict) -> bool:
+        """
+        Handle door interaction if a door is detected in line of sight.
+        Returns True if a door was handled, False otherwise.
+        """
+        if "LineOfSight" not in observation:
+            return False
+
+        block_type = observation["LineOfSight"].get("type", "")
+        distance = observation["LineOfSight"].get("distance", float('inf'))
+
+        if block_type == "iron_door" and distance < 3.0:
+            print(f"\nFound an iron door at distance {distance}")
+
+            self.agent_host.sendCommand("move 0")
+            log_block_observations(self.visited_block_coord, self.to_be_visited, observation)
+
+            # Check for button near the door
+            if "blocks" in observation:
+                button_pos = self.find_button_near_door(observation["blocks"], 5, observation)  # 5 is the grid size
+                if button_pos:
+                    print(f"Found button at relative position {button_pos}")
+                    x, y, z = button_pos
+                    print(f"x: {x}, y: {y}, z: {z}")
+
+                    # Determine turn direction based on button position
+                    # Button is at (-40, 16, 21) relative to agent at (-41, 15, 20)
+                    # So button is actually to the right (+x direction)
+                    curr_turn = 0
+                    if x > 0:  # Button is to the left
+                        curr_turn = -1.5
+                    elif x < 0:  # Button is to the right
+                        curr_turn = 1.5
+                    print(f"curr_turn: {curr_turn}")
+
+                    if curr_turn != 0:
+                        print(f"Turning {curr_turn} to face button...")
+                        self.agent_host.sendCommand("turn {}".format(curr_turn))
+                        print("Sleeping for 0.15s after turn command...")
+                        time.sleep(0.15)
+
+                    print("Pressing button...")
+                    self.agent_host.sendCommand("use 1")
+                    print("Sleeping for 0.05s after button press...")
+                    time.sleep(0.05)
+                    self.agent_host.sendCommand("use 0")
+                    print("Sleeping for 0.05s after button release...")
+                    time.sleep(0.05)
+
+                    # Turn back to original direction
+                    if curr_turn != 0:
+                        print(f"Turning back {-curr_turn} to original direction...")
+                        self.agent_host.sendCommand("turn {}".format(-curr_turn))
+                        print("Sleeping for 0.25s after return turn...")
+                        time.sleep(0.25)
+                        self.agent_host.sendCommand("turn 0")
+                        time.sleep(0.05)
+                        self.agent_host.sendCommand("move 2")
+
+                        print("Turn sequence complete")
+                    return True
+                else:
+                    print("No button found near the iron door")
+                    return False
+
+        elif block_type == "wooden_door" and distance < 2.0:
+            print(f"\nFound a wooden door at distance {distance}")
+            # Try to open the door
+            self.agent_host.sendCommand("use 1")
+            time.sleep(0.5)
+            self.agent_host.sendCommand("use 0")
+            time.sleep(0.5)
+            return True
+
+        return False
+
+    def get_state(self, observation):
+        if "entities" in observation:
+            for entity in observation["entities"]:
+                if entity["name"].lower() == "zombie":
+                    distance = math.sqrt(entity["x"]**2 + entity["z"]**2)
+                    health = entity.get("life", 20)
+
+                    if distance > 3:
+                        return "zombie_far"
+                    elif health < 10:
+                        return "zombie_low_health"
+                    else:
+                        return "zombie_high_health"
+
+        return "no_zombie"
+
+    def choose_action(self, state):
+        global q_table
+        epsilon = 0.2  # More exploration
+        if state not in q_table:
+            q_table[state] = {action: 0.0 for action in ACTIONS}
+            print(f"[INIT] Initialized new state in Q-table: {state}")
+
+        if random.uniform(0, 1) < epsilon:
+            chosen_action = random.choice(ACTIONS)
+            print(f"[EXPLORE] Randomly chosen action: {chosen_action} for state {state}")
+        else:
+            max_q = max(q_table[state].values())
+            best_actions = [a for a, q in q_table[state].items() if q == max_q]
+            chosen_action = random.choice(best_actions)
+            print(f"[EXPLOIT] Best action(s): {best_actions} → Chosen: {chosen_action} for state {state}")
+
+        return chosen_action
+
+    def update_q_table(self, state, action, reward, next_state):
+        global q_table
+        learning_rate = 0.1
+        discount_factor = 0.9
+
+        if state not in q_table:
+            q_table[state] = {a: 0.0 for a in ACTIONS}
+            print(f"[INIT] Initialized state {state} in Q-table.")
+
+        if next_state not in q_table:
+            q_table[next_state] = {a: 0.0 for a in ACTIONS}
+            print(f"[INIT] Initialized next state {next_state} in Q-table.")
+
+        old_q = q_table[state][action]
+        next_max = max(q_table[next_state].values())
+        new_q = old_q + learning_rate * (reward + discount_factor * next_max - old_q)
+
+        q_table[state][action] = new_q
+
+        print(f"[UPDATE] {state} --[{action}/{reward}]→ {next_state}, Q: {old_q:.2f} → {new_q:.2f}")
+
+    def combat_behavior(self, observation, current_yaw):
+
+        print("Combat behavior called")
+
+        if "entities" not in observation or not observation["entities"]:
+            print("No entities detected in combat_behavior.")
+            return
+
+        entities = observation["entities"]
+        self_x = observation.get("XPos", 0)
+        self_z = observation.get("ZPos", 0)
+
+        nearest_mob = None
+        min_dist = float("inf")
+
+        for entity in entities:
+            if entity["name"] == "Zombie":
+                dist = (entity["x"] - self_x) ** 2 + (entity["z"] - self_z) ** 2
+                if dist < min_dist:
+                    min_dist = dist
+                    nearest_mob = entity
+
+        if nearest_mob:
+            dx = nearest_mob["x"] - self_x
+            dz = nearest_mob["z"] - self_z
+
+            target_yaw = -math.degrees(math.atan2(dx, dz))
+            turn_amount = (target_yaw - current_yaw + 360) % 360
+            if turn_amount > 180:
+                turn_amount -= 360
+            turn_rate = (turn_amount / 180.0) * 2.0  # Multiply by 2.0 to make turn faster
+
+            self.agent_host.sendCommand(f"turn {turn_rate:.2f}")
+
+            distance = math.sqrt(min_dist)
+
+            if distance > 3:
+                print("distance > 3")
+                self.agent_host.sendCommand("move 1")
+            else:
+                self.agent_host.sendCommand("move 0")
+                print("Getting state...")
+                # Choose and execute Q-learned action
+                state = self.get_state(observation)
+                chosen_action = self.choose_action(state)
+
+                if chosen_action != "eat_food":
+                    print(f"Equipping {chosen_action} from hotbar slot {HOTBAR_SLOTS[chosen_action]}")
+                    # print(f"Sending command to equip {chosen_action}")
+                    if chosen_action == "diamond_sword":
+                        print("Sending command to equip diamond sword")
+                        self.agent_host.sendCommand("hotbar.1 1")
+                        self.agent_host.sendCommand("hotbar.1 0")
+                    elif chosen_action == "diamond_axe":
+                        print("Sending command to equip diamond axe")
+                        self.agent_host.sendCommand("hotbar.2 1")
+                        self.agent_host.sendCommand("hotbar.2 0")
+                    elif chosen_action == "bow":
+                        print("Sending command to equip bow")
+                        self.agent_host.sendCommand("hotbar.3 1")
+                        self.agent_host.sendCommand("hotbar.3 0")
+                    elif chosen_action == "stone_sword":
+                        print("Sending command to equip stone sword")
+                        self.agent_host.sendCommand("hotbar.4 1")
+                        self.agent_host.sendCommand("hotbar.4 0")
+                    elif chosen_action == "stone_axe":
+                        print("Sending command to equip stone axe")
+                        self.agent_host.sendCommand("hotbar.5 1")
+                        self.agent_host.sendCommand("hotbar.5 0")
+                    time.sleep(0.2)
+
+                if chosen_action in {"diamond_sword", "diamond_axe", "stone_sword", "stone_axe"}:
+                    # print(f"Equipping {chosen_action} from hotbar slot {HOTBAR_SLOTS[chosen_action]+1}")
+                    self.agent_host.sendCommand("attack 1")
+                    time.sleep(0.2)
+                    self.agent_host.sendCommand("attack 0")
+                elif chosen_action == "bow":
+                    self.agent_host.sendCommand("use 1")
+                    time.sleep(0.5)
+                    self.agent_host.sendCommand("use 0")
+                elif chosen_action == "eat_food":
+                    self.agent_host.sendCommand("hotbar.8 1")
+                    self.agent_host.sendCommand("use 1")
+                    time.sleep(1.2)
+                    self.agent_host.sendCommand("use 0")
+                print("Action taken:", chosen_action)
+
+
+                last_state = state
+                last_action = chosen_action
+
+                return chosen_action
 
     def navigate_portal_room(self) -> None:
+
+        global last_state, last_action
+
+        pre_combat_position = None
+        pre_combat_yaw = None
+
+
         size = 5
         center_idx = size ** 2 // 2
         center_x, center_z = center_idx % size, center_idx // size
@@ -619,148 +753,239 @@ class Golly(object):
 
             if world_state.number_of_observations_since_last_state > 0:
                 observation = json.loads(world_state.observations[-1].text)
-                # print(observation)
-                # Check for grid activation. Will not proceed gameloop if not found.
-                if "blocks" not in observation:
-                    print("Failed to retrieve information regarding block surroundings!")
-                    break
 
-                # Check for full stats activation. Will not proceed gameloop if not found.
-                if "XPos" not in observation or "YPos" not in observation or "ZPos" not in observation:
-                    print("It seems like FullStat is not activated!")
-                    break
+                # ✅ MOB CHECK START
+                if "entities" in observation and any(e["name"].lower() == "zombie" for e in observation["entities"]):
+                    print("Combat entity detected! Switching to combat mode...")
+                    # print("Detected entities:", observation["entities"])
+                    if self.current_state == "PATHFINDING":
+                        print("FIGHTING STATE ACTIVE")
+                        self.current_state = "FIGHTING"
 
-                if self.is_agent_in_stairs(observation["blocks"]):
-                    continue
+                    if pre_combat_position is None:
+                        # Save pre-combat position and yaw
+                        if "XPos" in observation and "ZPos" in observation and "Yaw" in observation:
+                            pre_combat_position = (observation["XPos"], observation["ZPos"])
+                            pre_combat_yaw = observation["Yaw"]
+                            print("Pre-combat position:", pre_combat_position)
+                            print("Pre-combat yaw:", pre_combat_yaw)
 
-                # To prevent blocks stacking the same coords, this check will prevent duplicate tuple values.
-                if (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
-                    math.floor(observation["ZPos"])) == self.block_visit[-1]:
-                    continue
+                    if self.current_state == "FIGHTING":
+                        next_state = self.get_state(observation)
+                        action = self.combat_behavior(observation, observation.get("Yaw", 0))
 
-                self.auto_correct_yaw(observation["Yaw"], current_direction)
-                if self.is_in_backtrack:
-                    curr_block = self.block_visit.pop()
-                    is_forward_cleared = self.check_clearance(curr_block, current_direction % 4)
-                    if is_forward_cleared:
-                        self.is_in_backtrack = False
-                        continue
-                    is_left_cleared = self.check_clearance(curr_block, (current_direction - 1) % 4)
-                    is_right_cleared = self.check_clearance(curr_block, (current_direction + 1) % 4)
-                    curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
+                        reward = 0
+                        if "DamageDealt" in observation and observation["DamageDealt"] > 0:
+                            reward += 2
+                        if "DamageTaken" in observation and observation["DamageTaken"] > 0:
+                            reward -= 3
+                        if "MobsKilled" in observation and observation["MobsKilled"] > 0:
+                            reward += 10
+                        if observation.get("DamageTaken", 0) == 0:
+                            reward += 3  # bonus for flawless fight
 
-                    if curr_turn != 0:
-                        # Adjust agent to the center block as it doesn't stop immediately.
-                        self.agent_host.sendCommand("move 0")
-                        time.sleep(0.2)
-                        self.agent_host.sendCommand(
-                            "tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1, curr_block[2] + 0.5))
-                        current_direction = (current_direction + curr_turn) % 4
-                        self.agent_host.sendCommand("turn {}".format(curr_turn))
-                        time.sleep(1)
-                        self.agent_host.sendCommand("turn 0")
-                        # auto_correct_yaw(self.agent_host, current_direction)
-                        self.is_in_backtrack = False
-                        continue
+                        print("State:", next_state)
+                        print("Action taken:", action)
+                        print("Reward this step:", reward)
 
-                    if len(self.block_visit) == 0:
-                        print("DEBUG: This agent is now all the way back to the beginning!")
-                        self.is_in_backtrack = False
+                        if last_state is not None and last_action is not None:
+                            print(f"Updating Q-table for: {last_state} → {last_action} → {reward}")
+                            self.update_q_table(last_state, last_action, reward, next_state)
+                        else:
+                            print("Skipping Q-update: missing last_state or last_action")
+
+                        last_state = next_state
+                        last_action = action
+
+                # ✅ MOB CHECK END
+
+                elif self.current_state == "PATHFINDING":
+                    # Check for grid activation. Will not proceed gameloop if not found.
+                    if "blocks" not in observation:
+                        print("Failed to retrieve information regarding block surroundings!")
                         break
 
-                    prev_block = self.block_visit[-1]
-                    x_diff = curr_block[0] - prev_block[0]
-                    z_diff = curr_block[2] - prev_block[2]
-                    if current_direction in [0, 2]:
-                        diff = x_diff
-                    elif current_direction in [1, 3]:
-                        diff = z_diff
-                    else:
-                        print("ERROR: Unknown direction ID")
-                        diff = 0
+                    # Check for full stats activation. Will not proceed gameloop if not found.
+                    if "XPos" not in observation or "YPos" not in observation or "ZPos" not in observation:
+                        print("It seems like FullStat is not activated!")
+                        break
 
-                    if diff in turn_map[current_direction]:
-                        turn = turn_map[current_direction][diff]
-                        self.agent_host.sendCommand("move 0")
-                        time.sleep(0.2)
-                        self.agent_host.sendCommand("tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1,
-                                                                    curr_block[2] + 0.5))
-                        self.agent_host.sendCommand("turn {}".format(turn))
-                        time.sleep(1)
-                        self.agent_host.sendCommand("turn 0")
-                        current_direction = (current_direction + turn) % 4
-                else:
-                    self.block_visit.append((math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
-                                        math.floor(observation["ZPos"])))
-                    # self.agent_host.sendCommand(f"chat /setblock {self.block_visit[-1][0]} {self.block_visit[-1][1]} {self.block_visit[-1][2]} minecraft:gold_block")
-                    for i in range(size ** 2):
-                        r_edge, c_edge = divmod(i, size)
-                        is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1       # For stack
+                    if self.is_agent_in_stairs(observation["blocks"]):
+                        continue
 
-                        y_elevation_offset = self.get_y_elevation_offset(observation["blocks"], i, size)
-                        if y_elevation_offset is None:
+                    # Handle door interaction if present
+                    if self.handle_door(observation):
+                        continue
+
+                    # To prevent blocks stacking the same coords, this check will prevent duplicate tuple values.
+                    standing_block = (math.floor(observation["XPos"]), math.floor(observation["YPos"]) - 1,
+                                      math.floor(observation["ZPos"]))
+                    if (not self.is_in_backtrack and standing_block == self.block_visit[-1]) or (self.is_in_backtrack and standing_block != self.block_visit[-1]):
+                        continue
+
+                    self.auto_correct_yaw(observation["Yaw"], current_direction)
+                    if self.is_in_backtrack:
+                        curr_block = self.block_visit.pop()
+                        is_forward_cleared = self.check_clearance(curr_block, current_direction % 4, observation["blocks"], observation)
+                        if is_forward_cleared:
+                            self.is_in_backtrack = False
                             continue
-
-                        curr_xpos = math.floor(observation["XPos"]) + center_block_offset[i][0]
-                        curr_ypos = math.floor(observation["YPos"] + y_elevation_offset - 1)
-                        curr_zpos = math.floor(observation["ZPos"]) - center_block_offset[i][1]
-                        curr_block_coord = (curr_xpos, curr_ypos, curr_zpos)
-                        try:
-                            if not is_around_edge:
-                                if curr_block_coord not in self.visited_block_coord:
-                                    self.visited_block_coord.add(curr_block_coord)
-                                    # self.agent_host.sendCommand(
-                                    #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:emerald_block")
-                                    if curr_block_coord in self.to_be_visited:
-                                        self.to_be_visited.remove(curr_block_coord)
-                                continue
-
-                            if curr_block_coord not in self.visited_block_coord and curr_block_coord not in self.to_be_visited:
-                                self.to_be_visited.add(curr_block_coord)
-                                # self.agent_host.sendCommand(
-                                #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:glowstone")
-                        except IndexError:
-                            print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 6)!")
-                            return
-
-                    # assert len(self.to_be_visited) == 3
-                    if len(self.to_be_visited) <= 0:
-                        print("No more blocks to explore to! Exiting loop...")
-                        self.agent_host.sendCommand("move 0")
-                        break
-
-                    is_forward_cleared = self.check_clearance(self.block_visit[-1], current_direction % 4)
-                    if not is_forward_cleared:
-                        is_left_cleared = self.check_clearance(self.block_visit[-1], (current_direction - 1) % 4)
-                        is_right_cleared = self.check_clearance(self.block_visit[-1], (current_direction + 1) % 4)
+                        is_left_cleared = self.check_clearance(curr_block, (current_direction - 1) % 4, observation["blocks"], observation)
+                        is_right_cleared = self.check_clearance(curr_block, (current_direction + 1) % 4, observation["blocks"], observation)
                         curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
 
-                        # Adjust agent to the center block as it doesn't stop immediately.
-                        self.agent_host.sendCommand("move 0")
-                        time.sleep(0.2)
-                        self.agent_host.sendCommand("tp {} {} {}".format(self.block_visit[-1][0] + 0.5, self.block_visit[-1][1] + 1, self.block_visit[-1][2] + 0.5))
-
                         if curr_turn != 0:
+                            # Adjust agent to the center block as it doesn't stop immediately.
+                            self.agent_host.sendCommand("move 0")
+                            time.sleep(0.2)
+                            self.agent_host.sendCommand(
+                                "tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1, curr_block[2] + 0.5))
                             current_direction = (current_direction + curr_turn) % 4
                             self.agent_host.sendCommand("turn {}".format(curr_turn))
                             time.sleep(1)
+                            self.agent_host.sendCommand("turn 0")
+                            # auto_correct_yaw(agent_host, current_direction)
+                            self.is_in_backtrack = False
+                            continue
+
+                        if len(self.block_visit) == 0:
+                            print("DEBUG: This agent is now all the way back to the beginning!")
+                            self.is_in_backtrack = False
+                            break
+
+                        prev_block = self.block_visit[-1]
+                        x_diff = curr_block[0] - prev_block[0]
+                        z_diff = curr_block[2] - prev_block[2]
+                        if current_direction in [0, 2]:
+                            diff = x_diff
+                        elif current_direction in [1, 3]:
+                            diff = z_diff
                         else:
-                            self.is_in_backtrack = True
-                            current_direction = (current_direction + 2) % 4
-                            self.agent_host.sendCommand("turn -1")
-                            time.sleep(2)
+                            print("ERROR: Unknown direction ID")
+                            diff = 0
+
+                        if diff in turn_map[current_direction]:
+                            turn = turn_map[current_direction][diff]
+                            self.agent_host.sendCommand("move 0")
+                            time.sleep(0.2)
+                            self.agent_host.sendCommand("tp {} {} {}".format(curr_block[0] + 0.5, curr_block[1] + 1,
+                                                                        curr_block[2] + 0.5))
+                            self.agent_host.sendCommand("turn {}".format(turn))
+                            time.sleep(1)
+                            self.agent_host.sendCommand("turn 0")
+                            current_direction = (current_direction + turn) % 4
+                    else:
+                        self.block_visit.append(standing_block)
+                        # agent_host.sendCommand(f"chat /setblock {block_visit[-1][0]} {block_visit[-1][1]} {block_visit[-1][2]} minecraft:gold_block")
+                        for i in range(size ** 2):
+                            r_edge, c_edge = divmod(i, size)
+                            is_around_edge = r_edge == 0 or r_edge == size - 1 or c_edge == 0 or c_edge == size - 1       # For stack
+
+                            y_elevation_offset = self.get_y_elevation_offset(observation["blocks"], i, size)
+                            if y_elevation_offset is None:
+                                continue
+
+                            curr_xpos = math.floor(observation["XPos"]) + center_block_offset[i][0]
+                            curr_ypos = math.floor(observation["YPos"] + y_elevation_offset - 1)
+                            curr_zpos = math.floor(observation["ZPos"]) - center_block_offset[i][1]
+                            curr_block_coord = (curr_xpos, curr_ypos, curr_zpos)
+                            try:
+                                if not is_around_edge:
+                                    if curr_block_coord not in self.visited_block_coord:
+                                        self.visited_block_coord.add(curr_block_coord)
+                                        # agent_host.sendCommand(
+                                        #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:emerald_block")
+                                        if curr_block_coord in self.to_be_visited:
+                                            self.to_be_visited.remove(curr_block_coord)
+                                    continue
+
+                                if curr_block_coord not in self.visited_block_coord and curr_block_coord not in self.to_be_visited:
+                                    self.to_be_visited.add(curr_block_coord)
+                                    # agent_host.sendCommand(
+                                    #     f"chat /setblock {curr_block_coord[0]} {curr_block_coord[1]} {curr_block_coord[2]} minecraft:glowstone")
+                            except IndexError:
+                                print("Unable to retrieve the block either up or down! Perhaps you had set the y range too low from XML (minimum is 6)!")
+                                return
+
+                        # assert len(to_be_visited) == 3
+                        if len(self.to_be_visited) <= 0:
+                            print("No more blocks to explore to! Exiting loop...")
+                            self.agent_host.sendCommand("move 0")
+                            break
+
+                        is_forward_cleared = self.check_clearance(self.block_visit[-1], current_direction % 4, observation["blocks"], observation)
+                        if not is_forward_cleared:
+                            is_left_cleared = self.check_clearance(self.block_visit[-1], (current_direction - 1) % 4, observation["blocks"], observation)
+                            is_right_cleared = self.check_clearance(self.block_visit[-1], (current_direction + 1) % 4, observation["blocks"], observation)
+                            curr_turn = -1 if is_left_cleared else 1 if is_right_cleared else 0
+
+                            # Adjust agent to the center block as it doesn't stop immediately.
+                            self.agent_host.sendCommand("move 0")
+                            time.sleep(0.2)
+                            self.agent_host.sendCommand("tp {} {} {}".format(self.block_visit[-1][0] + 0.5, self.block_visit[-1][1] + 1, self.block_visit[-1][2] + 0.5))
+
+                            if curr_turn != 0:
+                                current_direction = (current_direction + curr_turn) % 4
+                                self.agent_host.sendCommand("turn {}".format(curr_turn))
+                                time.sleep(1)
+                            else:
+                                self.is_in_backtrack = True
+                                current_direction = (current_direction + 2) % 4
+                                self.agent_host.sendCommand("turn -1")
+                                time.sleep(2)
+                            self.agent_host.sendCommand("turn 0")
+                            # auto_correct_yaw(agent_host, current_direction)
+                        self.adjust_to_center(observation["blocks"], size, current_direction)
+
+                    # print("\nVisited Blocks:", list(visited_block_coord))
+                    # print("To Be Visited:", list(to_be_visited))
+                    # print("Current Direction: ", current_direction)
+                    # print("------------------------------------------------------------------")
+                    self.agent_host.sendCommand("move 1")
+
+                elif self.current_state == "FIGHTING" and (len(observation["entities"]) <= 1 or not any(e["name"].lower() == "zombie" for e in observation["entities"])):
+                    print("Combat over. Returning to pathfinding...")
+
+                    # Restore pre-combat position
+                    if pre_combat_position:
+                        x, z = pre_combat_position
+                        self.agent_host.sendCommand("move 0")
+                        time.sleep(0.2)
+                        # Get current y position since ~ doesn't work
+                        y = observation.get("YPos", 0)
+                        self.agent_host.sendCommand(f"tp {x + 0.5} {y} {z + 0.5}")
+                        time.sleep(0.2)
+
+                    # Restore yaw
+                    if pre_combat_yaw is not None:
+                        # print("Restoring yaw")
+                        # print("Pre-combat position:", pre_combat_position)
+                        # print("Pre-combat yaw:", pre_combat_yaw)
+                        current_yaw = observation.get("Yaw", 0)
+                        # print("Current yaw:", current_yaw)
+                        yaw_diff = (pre_combat_yaw - current_yaw + 360) % 360
+                        # print("Yaw difference:", yaw_diff)
+                        if yaw_diff > 180:
+                            yaw_diff -= 360
+                        turn_rate = yaw_diff / 90
+                        self.agent_host.sendCommand(f"turn {turn_rate:.2f}")
+                        time.sleep(abs(turn_rate) * 1)  # Scale sleep with amount turned
                         self.agent_host.sendCommand("turn 0")
-                        # auto_correct_yaw(self.agent_host, current_direction)
 
-                print("\nVisited Blocks:", list(self.visited_block_coord))
-                print("To Be Visited:", list(self.to_be_visited))
-                print("Current Direction: ", current_direction)
-                print("------------------------------------------------------------------")
-                self.agent_host.sendCommand("move 1")
+                    # Reset state
+                    last_state = None
+                    last_action = None
+                    pre_combat_position = None
+                    pre_combat_yaw = None
+                    self.current_state = "PATHFINDING"
+                    print("Returned to PATHFINDING state.")
+                    # print("Last line of algorithm")
+                # print("Detected entities:", observation["entities"])
+                # print("Current state:", self.current_state)
 
-
-    def mine_hidden_path(self):
-        pass
+def save_q_table():
+    with open("q_learning_rewards.pkl", "wb") as f:
+        pickle.dump(q_table, f)
 
 def main():
     agent_host = MalmoPython.AgentHost()
@@ -809,9 +1034,11 @@ def main():
     agent_host.sendCommand("chat /locate Stronghold")
     while True:
         world_state = agent_host.getWorldState()
-        if world_state.is_mission_running and world_state.number_of_observations_since_last_state > 0:
+        if not world_state.is_mission_running:
+            break
+
+        if world_state.number_of_observations_since_last_state > 0:
             observation = json.loads(world_state.observations[-1].text)
-            print(observation)
             if "Chat" in observation:
                 coords = golly.get_stronghold_coords(observation)
                 golly.teleport_to_stronghold(coords)
@@ -820,8 +1047,6 @@ def main():
         # time.sleep() would not be efficient here.
         # time.sleep(1)
 
-        if not world_state.is_mission_running:
-            break
 
     golly.fly_down_to_staircase()
     time.sleep(2)
@@ -838,6 +1063,16 @@ def main():
     print()
     print("Mission ended")
     # Mission has ended.
+    # === Save Q-table after mission ends ===
+    with open(Q_SAVE_PATH, "wb") as f:
+        pickle.dump(q_table, f)
+    print("Q-table saved.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user. Saving Q-table...")
+        save_q_table()
+        print("Q-table saved successfully. Exiting.")
+        sys.exit(0)
