@@ -57,7 +57,7 @@ def run_xml_mission():
                 <Weather>clear</Weather>
             </ServerInitialConditions> 
             <ServerHandlers>
-                <FileWorldGenerator src="C:\\Malmo\\Minecraft\\run\\saves\\FlatWorld Stronghold Malmo"/>
+                <FileWorldGenerator src="C:\\Malmo-0.37.0-Windows-64bit_withBoost_Python3.7\\Minecraft\\run\\saves\\FlatWorld Stronghold Malmo"/>
                 <ServerQuitFromTimeUp timeLimitMs="120000"/>
                 <ServerQuitWhenAnyAgentFinishes/>
             </ServerHandlers>
@@ -66,7 +66,7 @@ def run_xml_mission():
         <AgentSection mode="Survival">
             <Name>Golly</Name>
             <AgentStart>
-                <Placement x="''' + str(X_COORD + 0.5) + '''" y="64" z="''' + str(Z_COORD) + '''"/>
+                <Placement x="''' + str(14020 + 0.5) + '''" y="64" z="''' + str(2884.5) + '''"/>
                 <Inventory>
                     <InventoryItem slot="0" type="diamond_sword"/>
                     <InventoryItem slot="1" type="diamond_axe"/>
@@ -87,7 +87,7 @@ def run_xml_mission():
                     <Mob type="Zombie" reward="10"/>
                 </RewardForDamagingEntity>
                 <ObservationFromNearbyEntities>
-                    <Range name="entities" xrange="10" yrange="2" zrange="10" />
+                    <Range name="entities" xrange="4" yrange="2" zrange="4" />
                 </ObservationFromNearbyEntities>
                 <ObservationFromGrid>
                     <Grid name="blocks">
@@ -103,96 +103,6 @@ def run_xml_mission():
             </AgentHandlers>
         </AgentSection>
     </Mission>'''
-
-
-def log_block_observations(visited_block_coord, to_be_visited, observation):
-    """
-    Continuously logs the visited blocks and blocks to visit to agent file.
-    Parameters:
-        visited_block_coord (set): Set of visited block coordinates (x, y, z)
-        to_be_visited (set): Set of block coordinates queued for exploration
-        observation (dict): Dictionary containing current observations
-    Returns:
-        None
-    """
-    # Write new observations to file
-    with open('block_observations.txt', 'a') as f:
-        f.write("\n=== New Observation ===\n")
-
-        # Write agent orientation info
-        f.write(f"\nAgent Orientation:\n")
-        f.write(f"Yaw: {observation.get('Yaw', 'N/A')}\n")
-        f.write(f"Pitch: {observation.get('Pitch', 'N/A')}\n")
-
-        # Write line of sight info if available
-        if "LineOfSight" in observation:
-            los = observation["LineOfSight"]
-            f.write(f"\nLine of Sight:\n")
-            f.write(f"Type: {los.get('type', 'N/A')}\n")
-            f.write(f"Distance: {los.get('distance', 'N/A')}\n")
-
-        # Group blocks by Y level
-        blocks_by_y = {}
-        for block in visited_block_coord:
-            x, y, z = block
-            if y not in blocks_by_y:
-                blocks_by_y[y] = []
-            blocks_by_y[y].append(block)
-
-        # Get agent Y position
-        agent_y = math.floor(observation.get("YPos", 0))
-
-        # Print blocks for all Y levels in grid range (-3 to +2)
-        for relative_y in range(-3, 3):
-            y = agent_y + relative_y
-
-            f.write(f"\nY = {y} / {relative_y}\n")
-
-            # Calculate base index for this Y level
-            base_index = (relative_y + 3) * 25  # 25 blocks per layer (5x5)
-
-            # Print 5x5 grid representation
-            f.write("Grid Layout:\n")
-            for row in range(5):
-                grid_row = []
-                for col in range(5):
-                    idx = base_index + (row * 5) + col
-                    grid_row.append(f"[{idx:3d}]")
-                f.write("  ".join(grid_row) + "\n")
-            f.write("\n")
-
-            # Print block details
-            f.write("Block Details:\n")
-            for i in range(25):  # Iterate through all blocks in the 5x5 grid
-                idx = base_index + i
-                if idx < len(observation["blocks"]):
-                    block_type = observation["blocks"][idx]
-                    # Calculate relative coordinates for this block
-                    rel_x = (i % 5) - 2  # Center is at x=0
-                    rel_z = (i // 5) - 2  # Center is at z=0
-                    # Calculate absolute coordinates
-                    abs_x = math.floor(observation["XPos"]) + rel_x
-                    abs_z = math.floor(observation["ZPos"]) + rel_z
-                    f.write(f"[{idx}] ({abs_x}, {y}, {abs_z}) - {block_type}")
-
-                    # Agent is at center of grid (x=0,z=0) at y=0 level
-                    if relative_y == 0 and rel_x == 0 and rel_z == 0:
-                        f.write(" <-- Agent Position")
-                    f.write("\n")
-            f.write("\n")
-
-        # Print visited blocks
-        f.write("\nVisited Blocks:\n")
-        for block in visited_block_coord:
-            f.write(f"{block}\n")
-
-        # Print blocks to visit
-        f.write("\nBlocks to Visit:\n")
-        for block in to_be_visited:
-            f.write(f"{block}\n")
-
-        f.write("\n" + "-" * 50 + "\n")
-        f.flush()  # Ensure the file is written immediately
 
 
 class Golly(object):
@@ -252,6 +162,11 @@ class Golly(object):
         self.agent_host.sendCommand(tp_command)
 
     def pre_start(self) -> None:
+        # Give night vision effect to see in the dark
+        self.agent_host.sendCommand("chat /effect @p night_vision 99999 255")
+        time.sleep(0.5)
+        self.agent_host.sendCommand("chat /gamemode 0")
+        
         self.agent_host.sendCommand("move 1")
         time.sleep(1)
         self.agent_host.sendCommand("move 0")
@@ -374,6 +289,7 @@ class Golly(object):
         margin_threshold = 0.5
 
         # THIS SHIT DOES NOT RECOGNIZE YAW AND PITCH! AM I FUCKING DREAMING?!!!!!!!!!!
+        # Damn I feel you
         # agent_host.sendCommand("chat /tp ~ ~ ~ {} ~".format(yaw_def[current_direction]))
 
         curr_yaw = yaw % 360
@@ -514,7 +430,6 @@ class Golly(object):
             print(f"\nFound an iron door at distance {distance}")
 
             self.agent_host.sendCommand("move 0")
-            log_block_observations(self.visited_block_coord, self.to_be_visited, observation)
 
             # Check for button near the door
             if "blocks" in observation:
@@ -660,7 +575,7 @@ class Golly(object):
             turn_amount = (target_yaw - current_yaw + 360) % 360
             if turn_amount > 180:
                 turn_amount -= 360
-            turn_rate = (turn_amount / 180.0) * 2.0  # Multiply by 2.0 to make turn faster
+            turn_rate = (turn_amount / 180.0) * 3.0  # Multiply by 2.0 to make turn faster
 
             self.agent_host.sendCommand(f"turn {turn_rate:.2f}")
 
@@ -800,6 +715,7 @@ class Golly(object):
                 # ✅ MOB CHECK END
 
                 elif self.current_state == "PATHFINDING":
+                    print("PATHFINDING STATE ACTIVE")
                     # Check for grid activation. Will not proceed gameloop if not found.
                     if "blocks" not in observation:
                         print("Failed to retrieve information regarding block surroundings!")
@@ -809,6 +725,22 @@ class Golly(object):
                     if "XPos" not in observation or "YPos" not in observation or "ZPos" not in observation:
                         print("It seems like FullStat is not activated!")
                         break
+
+                    # Check for end portal frame
+                    if "LineOfSight" in observation:
+                        block_type = observation["LineOfSight"].get("type", "")
+                        distance = observation["LineOfSight"].get("distance", float('inf'))
+                        if block_type == "end_portal_frame":
+                            print(f"\nFound the portal room!")
+                            # Clean up effects and return to normal mode
+                            self.agent_host.sendCommand("chat /effect @p clear")
+                            time.sleep(0.5)
+                            self.agent_host.sendCommand("fly 0")
+                            self.agent_host.sendCommand("chat /ability @p mayfly false")
+                            self.agent_host.sendCommand("chat /gamemode 0")
+                            # End the mission
+                            self.agent_host.sendCommand("quit")
+                            return True
 
                     if self.is_agent_in_stairs(observation["blocks"]):
                         continue
@@ -1049,6 +981,8 @@ def main():
 
 
     golly.fly_down_to_staircase()
+    time.sleep(2)
+    golly.pre_start()
     time.sleep(2)
     golly.navigate_portal_room()
 
